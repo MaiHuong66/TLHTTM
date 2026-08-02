@@ -1,0 +1,166 @@
+import { useState } from "react";
+import type { ChangeEvent, FormEvent } from "react";
+import { useNavigate } from "react-router-dom";
+import { useTeacherAuth } from "../../context/TeacherAuthContext";
+import { useToast } from "../../context/ToastContext";
+import { uploadDocument } from "../../lib/api";
+import { LoadingOverlay } from "../../components/LoadingOverlay";
+import type { UploadFilePayload } from "../../../shared/types";
+
+const ACCEPTED_EXT = ".pdf,.docx,.xlsx,.png,.jpg,.jpeg";
+
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      const base64 = result.slice(result.indexOf(",") + 1);
+      resolve(base64);
+    };
+    reader.onerror = () => reject(new Error(`Không thể đọc file "${file.name}".`));
+    reader.readAsDataURL(file);
+  });
+}
+
+export function TeacherUploadPage() {
+  const [pastedText, setPastedText] = useState("");
+  const [files, setFiles] = useState<File[]>([]);
+  const [loading, setLoading] = useState(false);
+  const { token } = useTeacherAuth();
+  const { showToast } = useToast();
+  const navigate = useNavigate();
+
+  function handleFileChange(e: ChangeEvent<HTMLInputElement>) {
+    const selected = Array.from(e.target.files ?? []);
+    setFiles((prev) => [...prev, ...selected]);
+    e.target.value = "";
+  }
+
+  function removeFile(index: number) {
+    setFiles((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!token) return;
+
+    if (!pastedText.trim() && files.length === 0) {
+      showToast("Vui lòng dán nội dung hoặc chọn ít nhất 1 file.", "error");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const payloadFiles: UploadFilePayload[] = await Promise.all(
+        files.map(async (f) => ({
+          name: f.name,
+          mimeType: f.type || guessMimeType(f.name),
+          base64: await readFileAsBase64(f),
+        }))
+      );
+
+      const result = await uploadDocument(token, pastedText, payloadFiles);
+      showToast(
+        `Đã tạo bài giảng "${result.title}" với ${result.questionCount} câu hỏi. Website sẽ tự động cập nhật cho sinh viên.`,
+        "success"
+      );
+      navigate("/teacher/lecture");
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Gửi tài liệu thất bại.", "error");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      {loading && (
+        <LoadingOverlay message="AI đang đọc tài liệu, tạo bài giảng và sinh ngân hàng câu hỏi... Quá trình này có thể mất khoảng 1 phút." />
+      )}
+
+      <div>
+        <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Upload tài liệu</h1>
+        <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+          Dán nội dung hoặc tải lên tài liệu (PDF, DOCX, XLSX, PNG, JPG). Hệ thống sẽ tự động tạo bài giảng và ngân
+          hàng ~100 câu hỏi trắc nghiệm, thay thế toàn bộ dữ liệu cũ.
+        </p>
+      </div>
+
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div>
+          <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">
+            Nội dung tài liệu (dán trực tiếp)
+          </label>
+          <textarea
+            value={pastedText}
+            onChange={(e) => setPastedText(e.target.value)}
+            rows={8}
+            placeholder="Dán nội dung tài liệu vào đây..."
+            className="w-full resize-y rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+          />
+        </div>
+
+        <div>
+          <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">
+            Hoặc tải lên file (có thể chọn nhiều file)
+          </label>
+          <input
+            type="file"
+            multiple
+            accept={ACCEPTED_EXT}
+            onChange={handleFileChange}
+            className="block w-full text-sm text-slate-600 dark:text-slate-300 file:mr-3 file:rounded-lg file:border-0 file:bg-sky-600 file:px-4 file:py-2 file:text-white file:font-medium hover:file:bg-sky-700 file:cursor-pointer cursor-pointer"
+          />
+          {files.length > 0 && (
+            <ul className="mt-3 space-y-1">
+              {files.map((f, i) => (
+                <li
+                  key={`${f.name}-${i}`}
+                  className="flex items-center justify-between rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm"
+                >
+                  <span className="truncate text-slate-700 dark:text-slate-200">
+                    {f.name} <span className="text-slate-400">({(f.size / 1024).toFixed(0)} KB)</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => removeFile(i)}
+                    className="ml-2 shrink-0 text-red-500 hover:text-red-700 font-medium"
+                  >
+                    Xóa
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <button
+          type="submit"
+          disabled={loading}
+          className="w-full sm:w-auto rounded-lg bg-sky-600 px-6 py-3 font-semibold text-white hover:bg-sky-700 disabled:opacity-50 transition-colors"
+        >
+          GỬI TÀI LIỆU
+        </button>
+      </form>
+    </div>
+  );
+}
+
+function guessMimeType(filename: string): string {
+  const ext = filename.toLowerCase().split(".").pop();
+  switch (ext) {
+    case "pdf":
+      return "application/pdf";
+    case "docx":
+      return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    case "xlsx":
+      return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    case "png":
+      return "image/png";
+    case "jpg":
+    case "jpeg":
+      return "image/jpeg";
+    default:
+      return "application/octet-stream";
+  }
+}

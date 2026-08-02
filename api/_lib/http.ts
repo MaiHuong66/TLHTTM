@@ -17,7 +17,7 @@ export function friendlyErrorMessage(err: unknown): string {
     if (/GOOGLE_SERVICE_ACCOUNT|GOOGLE_PRIVATE_KEY|GOOGLE_SHEET_ID/i.test(err.message)) {
       return "Lỗi cấu hình: chưa thiết lập thông tin Google Sheets trên máy chủ.";
     }
-    if (/UPSTASH_REDIS/i.test(err.message)) {
+    if (/KV_REST_API|UPSTASH_REDIS/i.test(err.message)) {
       return "Lỗi cấu hình: chưa thiết lập thông tin lưu trữ (Upstash Redis) trên máy chủ.";
     }
     if (/quota|rate limit|429/i.test(err.message)) {

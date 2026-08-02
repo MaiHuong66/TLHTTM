@@ -9,11 +9,13 @@ let redisClient: Redis | null = null;
 function getClient(): Redis {
   if (redisClient) return redisClient;
 
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  // Vercel Marketplace (Upstash for Redis) đặt tên theo chuẩn Vercel KV cũ (KV_REST_API_*);
+  // Upstash tài khoản trực tiếp dùng UPSTASH_REDIS_REST_*. Hỗ trợ cả hai.
+  const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
   if (!url || !token) {
     throw new Error(
-      "Thiếu biến môi trường UPSTASH_REDIS_REST_URL hoặc UPSTASH_REDIS_REST_TOKEN."
+      "Thiếu biến môi trường KV_REST_API_URL/KV_REST_API_TOKEN (hoặc UPSTASH_REDIS_REST_URL/UPSTASH_REDIS_REST_TOKEN)."
     );
   }
 

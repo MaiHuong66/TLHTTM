@@ -56,9 +56,9 @@ Sheet `Results` (chứa bảng kết quả) sẽ được ứng dụng tự đ�
 
 ### 3. Upstash Redis — cho Bài giảng + Ngân hàng câu hỏi
 
-Cách nhanh nhất: trong Vercel Dashboard của project, vào tab **Storage > Marketplace Database Integrations**, chọn **Upstash for Redis**, tạo database miễn phí. Vercel sẽ tự thêm 2 biến `UPSTASH_REDIS_REST_URL` và `UPSTASH_REDIS_REST_TOKEN` vào project.
+Cách nhanh nhất: trong Vercel Dashboard của project, vào tab **Storage > Marketplace Database Integrations**, chọn **Upstash for Redis**, tạo database miễn phí (gói Free, 500.000 lệnh/tháng). Vercel sẽ tự thêm các biến `KV_REST_API_URL` và `KV_REST_API_TOKEN` vào project (đặt theo chuẩn tên Vercel KV cũ, code đã hỗ trợ sẵn).
 
-Hoặc tạo thủ công tại https://console.upstash.com > **Create database** > copy `UPSTASH_REDIS_REST_URL` và `UPSTASH_REDIS_REST_TOKEN` trong tab **REST API**.
+Hoặc tạo thủ công tại https://console.upstash.com > **Create database** > copy `UPSTASH_REDIS_REST_URL` và `UPSTASH_REDIS_REST_TOKEN` trong tab **REST API** (code cũng hỗ trợ cặp tên này).
 
 ### 4. Tài khoản Giảng viên
 

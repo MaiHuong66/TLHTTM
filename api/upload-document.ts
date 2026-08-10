@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { verifyAuthHeader } from "./_lib/auth.js";
 import { setLecture, setQuestions } from "./_lib/kv.js";
-import { generateLecture, generateQuestionBank } from "./_lib/gemini.js";
+import { generateLecture, generateQuestionBank, uploadFilesToGemini } from "./_lib/gemini.js";
 import type { DocumentInput } from "./_lib/gemini.js";
 import {
   DOCX_MIME_TYPES,
@@ -73,7 +73,7 @@ async function handleUpload(req: VercelRequest, res: VercelResponse) {
   }
 
   const extractedTexts: DocumentInput["extractedTexts"] = [];
-  const inlineFiles: DocumentInput["inlineFiles"] = [];
+  const inlineFiles: { name: string; mimeType: string; base64: string }[] = [];
   const unsupported: string[] = [];
 
   for (const file of files) {
@@ -106,7 +106,16 @@ async function handleUpload(req: VercelRequest, res: VercelResponse) {
     return;
   }
 
-  const doc: DocumentInput = { pastedText, extractedTexts, inlineFiles };
+  let uploadedFiles: DocumentInput["uploadedFiles"];
+  try {
+    uploadedFiles = await uploadFilesToGemini(inlineFiles);
+  } catch (err) {
+    console.error("upload-document: uploadFilesToGemini failed:", err);
+    sendError(res, 502, `Lỗi khi tải file lên Gemini: ${friendlyErrorMessage(err)}`);
+    return;
+  }
+
+  const doc: DocumentInput = { pastedText, extractedTexts, uploadedFiles };
 
   // Chạy song song để tránh vượt giới hạn thời gian thực thi (60s trên gói Hobby của Vercel)
   const [lectureResult, questionsResult] = await Promise.allSettled([

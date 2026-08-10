@@ -21,10 +21,65 @@ function getClient(): GoogleGenAI {
   return client;
 }
 
+export interface UploadedFileRef {
+  name: string;
+  mimeType: string;
+  uri: string;
+}
+
 export interface DocumentInput {
   pastedText: string;
   extractedTexts: { name: string; text: string }[];
-  inlineFiles: { name: string; mimeType: string; base64: string }[];
+  uploadedFiles: UploadedFileRef[];
+}
+
+/**
+ * Upload từng file lên Gemini Files API đúng 1 lần và chờ tới khi sẵn sàng (ACTIVE),
+ * để 5 lệnh generateContent sau đó (1 bài giảng + 4 lô câu hỏi) chỉ cần tham chiếu nhẹ
+ * (fileUri) thay vì mỗi lệnh đều gửi lại toàn bộ base64 — tránh crash do quá tải bộ nhớ
+ * khi 5 request chạy song song.
+ */
+export async function uploadFilesToGemini(
+  files: { name: string; mimeType: string; base64: string }[]
+): Promise<UploadedFileRef[]> {
+  if (files.length === 0) return [];
+  const ai = getClient();
+
+  return Promise.all(
+    files.map(async (f) => {
+      const buffer = Buffer.from(f.base64, "base64");
+      const blob = new Blob([buffer], { type: f.mimeType });
+      const uploaded = await ai.files.upload({
+        file: blob,
+        config: { mimeType: f.mimeType, displayName: f.name },
+      });
+      return waitForFileActive(ai, uploaded, f.name);
+    })
+  );
+}
+
+async function waitForFileActive(
+  ai: GoogleGenAI,
+  file: { name?: string; uri?: string; mimeType?: string; state?: string },
+  displayName: string
+): Promise<UploadedFileRef> {
+  let current = file;
+  let attempts = 0;
+  while (current.state === "PROCESSING" && attempts < 20) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    if (!current.name) break;
+    current = await ai.files.get({ name: current.name });
+    attempts++;
+  }
+
+  if (current.state === "FAILED") {
+    throw new Error(`Gemini xử lý file "${displayName}" thất bại.`);
+  }
+  if (!current.uri || !current.mimeType) {
+    throw new Error(`Không lấy được thông tin file "${displayName}" đã upload lên Gemini.`);
+  }
+
+  return { name: current.name ?? displayName, mimeType: current.mimeType, uri: current.uri };
 }
 
 function buildDocumentParts(doc: DocumentInput): Part[] {
@@ -38,9 +93,8 @@ function buildDocumentParts(doc: DocumentInput): Part[] {
     parts.push({ text: `--- Nội dung trích xuất từ file "${f.name}" ---\n${f.text}` });
   }
 
-  for (const f of doc.inlineFiles) {
-    parts.push({ text: `--- File đính kèm: "${f.name}" ---` });
-    parts.push({ inlineData: { mimeType: f.mimeType, data: f.base64 } });
+  for (const f of doc.uploadedFiles) {
+    parts.push({ fileData: { fileUri: f.uri, mimeType: f.mimeType } });
   }
 
   return parts;

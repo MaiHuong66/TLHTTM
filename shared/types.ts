@@ -62,3 +62,16 @@ export interface UploadFilePayload {
 export interface ApiErrorBody {
   error: string;
 }
+
+export interface StartUploadResponse {
+  jobId: string;
+  totalSteps: number;
+}
+
+export interface UploadStepResponse {
+  status: "processing" | "done" | "failed";
+  completedSteps: number;
+  totalSteps: number;
+  error?: string;
+  result?: { title: string; sectionsCount: number; questionCount: number };
+}

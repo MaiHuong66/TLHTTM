@@ -3,7 +3,7 @@ import type { ContentListUnion, Part } from "@google/genai";
 import type { AnswerKey, ChatMessage, Lecture, Question } from "../../shared/types.js";
 
 const MODEL = "gemini-2.5-flash";
-const QUESTION_BATCH_COUNT = 4;
+export const QUESTION_BATCH_COUNT = 4;
 const QUESTIONS_PER_BATCH = 25;
 
 let client: GoogleGenAI | null = null;
@@ -174,7 +174,7 @@ const questionBatchSchema = {
   },
 };
 
-interface RawQuestion {
+export interface RawQuestion {
   question: string;
   optionA: string;
   optionB: string;
@@ -183,7 +183,14 @@ interface RawQuestion {
   correctAnswer: AnswerKey;
 }
 
-async function generateQuestionBatch(
+export const QUESTION_FOCUS_HINTS = [
+  "tập trung vào các khái niệm và định nghĩa cốt lõi",
+  "tập trung vào ví dụ minh họa và ứng dụng thực tế",
+  "tập trung vào so sánh, phân tích và các trường hợp đặc biệt",
+  "tập trung vào tổng hợp và các nội dung còn lại chưa khai thác",
+];
+
+export async function generateQuestionBatch(
   doc: DocumentInput,
   batchIndex: number,
   focusHint: string
@@ -224,18 +231,8 @@ async function generateQuestionBatch(
   return parsed;
 }
 
-export async function generateQuestionBank(doc: DocumentInput): Promise<Question[]> {
-  const focusHints = [
-    "tập trung vào các khái niệm và định nghĩa cốt lõi",
-    "tập trung vào ví dụ minh họa và ứng dụng thực tế",
-    "tập trung vào so sánh, phân tích và các trường hợp đặc biệt",
-    "tập trung vào tổng hợp và các nội dung còn lại chưa khai thác",
-  ];
-
-  const batches = await Promise.all(
-    Array.from({ length: QUESTION_BATCH_COUNT }, (_, i) => generateQuestionBatch(doc, i, focusHints[i]))
-  );
-
+/** Gộp các lô câu hỏi đã sinh (mỗi lô từ 1 lệnh gọi Gemini riêng), khử trùng và gán ID. */
+export function finalizeQuestions(batches: RawQuestion[][]): Question[] {
   const seen = new Set<string>();
   const questions: Question[] = [];
   let counter = 1;

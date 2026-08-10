@@ -3,9 +3,9 @@ import type { ChangeEvent, FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTeacherAuth } from "../../context/TeacherAuthContext";
 import { useToast } from "../../context/ToastContext";
-import { uploadDocument } from "../../lib/api";
+import { processUploadStep, startUpload } from "../../lib/api";
 import { LoadingOverlay } from "../../components/LoadingOverlay";
-import type { UploadFilePayload } from "../../../shared/types";
+import type { UploadFilePayload, UploadStepResponse } from "../../../shared/types";
 
 const ACCEPTED_EXT = ".pdf,.docx,.xlsx,.png,.jpg,.jpeg";
 
@@ -25,7 +25,7 @@ function readFileAsBase64(file: File): Promise<string> {
 export function TeacherUploadPage() {
   const [pastedText, setPastedText] = useState("");
   const [files, setFiles] = useState<File[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loadingMessage, setLoadingMessage] = useState<string | null>(null);
   const { token } = useTeacherAuth();
   const { showToast } = useToast();
   const navigate = useNavigate();
@@ -49,7 +49,7 @@ export function TeacherUploadPage() {
       return;
     }
 
-    setLoading(true);
+    setLoadingMessage("Đang tải tài liệu lên...");
     try {
       const payloadFiles: UploadFilePayload[] = await Promise.all(
         files.map(async (f) => ({
@@ -59,24 +59,35 @@ export function TeacherUploadPage() {
         }))
       );
 
-      const result = await uploadDocument(token, pastedText, payloadFiles);
+      const { jobId, totalSteps } = await startUpload(token, pastedText, payloadFiles);
+
+      let step: UploadStepResponse = { status: "processing", completedSteps: 0, totalSteps };
+      while (step.status === "processing") {
+        setLoadingMessage(
+          `AI đang tạo bài giảng và ngân hàng câu hỏi... (${step.completedSteps}/${step.totalSteps})`
+        );
+        step = await processUploadStep(token, jobId);
+      }
+
+      if (step.status === "failed") {
+        throw new Error(step.error || "Xử lý tài liệu thất bại.");
+      }
+
       showToast(
-        `Đã tạo bài giảng "${result.title}" với ${result.questionCount} câu hỏi. Website sẽ tự động cập nhật cho sinh viên.`,
+        `Đã tạo bài giảng "${step.result?.title}" với ${step.result?.questionCount} câu hỏi. Website sẽ tự động cập nhật cho sinh viên.`,
         "success"
       );
       navigate("/teacher/lecture");
     } catch (err) {
       showToast(err instanceof Error ? err.message : "Gửi tài liệu thất bại.", "error");
     } finally {
-      setLoading(false);
+      setLoadingMessage(null);
     }
   }
 
   return (
     <div className="space-y-6">
-      {loading && (
-        <LoadingOverlay message="AI đang đọc tài liệu, tạo bài giảng và sinh ngân hàng câu hỏi... Quá trình này có thể mất khoảng 1 phút." />
-      )}
+      {loadingMessage && <LoadingOverlay message={loadingMessage} />}
 
       <div>
         <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Upload tài liệu</h1>
@@ -136,7 +147,7 @@ export function TeacherUploadPage() {
 
         <button
           type="submit"
-          disabled={loading}
+          disabled={!!loadingMessage}
           className="w-full sm:w-auto rounded-lg bg-sky-600 px-6 py-3 font-semibold text-white hover:bg-sky-700 disabled:opacity-50 transition-colors"
         >
           GỬI TÀI LIỆU

@@ -5,8 +5,10 @@ import type {
   Lecture,
   QuizQuestion,
   ResultRow,
+  StartUploadResponse,
   SubmitTestResponse,
   UploadFilePayload,
+  UploadStepResponse,
 } from "../../shared/types";
 
 export class ApiError extends Error {
@@ -49,15 +51,23 @@ export function teacherLogin(username: string, password: string): Promise<{ toke
   });
 }
 
-export function uploadDocument(
+export function startUpload(
   token: string,
   pastedText: string,
   files: UploadFilePayload[]
-): Promise<{ title: string; sectionsCount: number; questionCount: number }> {
+): Promise<StartUploadResponse> {
   return request("/api/upload-document", {
     method: "POST",
     headers: authHeaders(token),
     body: JSON.stringify({ pastedText, files }),
+  });
+}
+
+export function processUploadStep(token: string, jobId: string): Promise<UploadStepResponse> {
+  return request("/api/upload-step", {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify({ jobId }),
   });
 }
 

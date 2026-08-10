@@ -1,8 +1,11 @@
 import { Redis } from "@upstash/redis";
 import type { Lecture, Question } from "../../shared/types.js";
+import type { RawQuestion, UploadedFileRef } from "./gemini.js";
 
 const LECTURE_KEY = "tlhttm:lecture";
 const QUESTIONS_KEY = "tlhttm:questions";
+const JOB_KEY_PREFIX = "tlhttm:upload-job:";
+const JOB_TTL_SECONDS = 15 * 60;
 
 let redisClient: Redis | null = null;
 
@@ -43,4 +46,32 @@ export async function getQuestions(): Promise<Question[] | null> {
 export async function setQuestions(questions: Question[]): Promise<void> {
   const redis = getClient();
   await redis.set(QUESTIONS_KEY, questions);
+}
+
+export interface UploadJob {
+  status: "processing" | "done" | "failed";
+  pastedText: string;
+  extractedTexts: { name: string; text: string }[];
+  uploadedFiles: UploadedFileRef[];
+  steps: string[];
+  totalSteps: number;
+  lecture?: Omit<Lecture, "updatedAt">;
+  questionBatches: RawQuestion[][];
+  error?: string;
+}
+
+export async function saveUploadJob(jobId: string, job: UploadJob): Promise<void> {
+  const redis = getClient();
+  await redis.set(`${JOB_KEY_PREFIX}${jobId}`, job, { ex: JOB_TTL_SECONDS });
+}
+
+export async function getUploadJob(jobId: string): Promise<UploadJob | null> {
+  const redis = getClient();
+  const data = await redis.get<UploadJob>(`${JOB_KEY_PREFIX}${jobId}`);
+  return data ?? null;
+}
+
+export async function deleteUploadJob(jobId: string): Promise<void> {
+  const redis = getClient();
+  await redis.del(`${JOB_KEY_PREFIX}${jobId}`);
 }

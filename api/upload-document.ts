@@ -1,7 +1,9 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
+import crypto from "node:crypto";
 import { verifyAuthHeader } from "./_lib/auth.js";
-import { setLecture, setQuestions } from "./_lib/kv.js";
-import { generateLecture, generateQuestionBank, uploadFilesToGemini } from "./_lib/gemini.js";
+import { saveUploadJob } from "./_lib/kv.js";
+import type { UploadJob } from "./_lib/kv.js";
+import { QUESTION_BATCH_COUNT, uploadFilesToGemini } from "./_lib/gemini.js";
 import type { DocumentInput } from "./_lib/gemini.js";
 import {
   DOCX_MIME_TYPES,
@@ -11,11 +13,14 @@ import {
   extractXlsxText,
 } from "./_lib/fileParsers.js";
 import { friendlyErrorMessage, methodNotAllowed, sendError } from "./_lib/http.js";
-import type { UploadFilePayload } from "../shared/types.js";
+import type { StartUploadResponse, UploadFilePayload } from "../shared/types.js";
 
+// Endpoint này chỉ chuẩn bị dữ liệu + tạo "job" xử lý nhiều bước (xem api/upload-step.ts),
+// KHÔNG tự gọi Gemini để tạo bài giảng/câu hỏi — nhờ đó luôn chạy nhanh, không sợ vượt 60s.
 export const config = { maxDuration: 60 };
 
 const MAX_TOTAL_RAW_BYTES = 4 * 1024 * 1024;
+const TOTAL_STEPS = 1 + QUESTION_BATCH_COUNT; // 1 bước bài giảng + N bước lô câu hỏi
 
 interface UploadBody {
   pastedText?: string;
@@ -24,7 +29,7 @@ interface UploadBody {
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
-    await handleUpload(req, res);
+    await handleStart(req, res);
   } catch (err) {
     console.error("upload-document unhandled error:", err);
     if (!res.headersSent) {
@@ -33,7 +38,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 }
 
-async function handleUpload(req: VercelRequest, res: VercelResponse) {
+async function handleStart(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "POST") {
     methodNotAllowed(res, ["POST"]);
     return;
@@ -115,40 +120,25 @@ async function handleUpload(req: VercelRequest, res: VercelResponse) {
     return;
   }
 
-  const doc: DocumentInput = { pastedText, extractedTexts, uploadedFiles };
-
-  // Chạy song song để tránh vượt giới hạn thời gian thực thi (60s trên gói Hobby của Vercel)
-  const [lectureResult, questionsResult] = await Promise.allSettled([
-    generateLecture(doc),
-    generateQuestionBank(doc),
-  ]);
-
-  if (lectureResult.status === "rejected") {
-    console.error("upload-document: generateLecture failed:", lectureResult.reason);
-    sendError(res, 502, `Lỗi khi tạo bài giảng: ${friendlyErrorMessage(lectureResult.reason)}`);
-    return;
-  }
-  if (questionsResult.status === "rejected") {
-    console.error("upload-document: generateQuestionBank failed:", questionsResult.reason);
-    sendError(res, 502, `Lỗi khi sinh ngân hàng câu hỏi: ${friendlyErrorMessage(questionsResult.reason)}`);
-    return;
-  }
-
-  const lectureData = lectureResult.value;
-  const questions = questionsResult.value;
+  const jobId = crypto.randomUUID();
+  const job: UploadJob = {
+    status: "processing",
+    pastedText,
+    extractedTexts,
+    uploadedFiles,
+    steps: ["lecture", ...Array.from({ length: QUESTION_BATCH_COUNT }, (_, i) => `batch${i}`)],
+    totalSteps: TOTAL_STEPS,
+    questionBatches: [],
+  };
 
   try {
-    await setLecture({ ...lectureData, updatedAt: new Date().toISOString() });
-    await setQuestions(questions);
+    await saveUploadJob(jobId, job);
   } catch (err) {
-    console.error("upload-document: failed to save to storage:", err);
-    sendError(res, 500, `Lỗi khi lưu dữ liệu: ${friendlyErrorMessage(err)}`);
+    console.error("upload-document: failed to save job:", err);
+    sendError(res, 500, `Lỗi khi khởi tạo tiến trình xử lý: ${friendlyErrorMessage(err)}`);
     return;
   }
 
-  res.status(200).json({
-    title: lectureData.title,
-    sectionsCount: lectureData.sections.length,
-    questionCount: questions.length,
-  });
+  const response: StartUploadResponse = { jobId, totalSteps: TOTAL_STEPS };
+  res.status(200).json(response);
 }

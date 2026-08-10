@@ -3,8 +3,10 @@ import type { ContentListUnion, Part } from "@google/genai";
 import type { AnswerKey, ChatMessage, Lecture, Question } from "../../shared/types.js";
 
 const MODEL = "gemini-2.5-flash";
-export const QUESTION_BATCH_COUNT = 4;
-const QUESTIONS_PER_BATCH = 25;
+// Nhiều lô nhỏ thay vì ít lô lớn: mỗi lô nhẹ hơn, ít rủi ro vượt giới hạn 60s/lần gọi hàm
+// khi tài liệu nguồn nặng (PDF nhiều trang/ảnh).
+export const QUESTION_BATCH_COUNT = 10;
+const QUESTIONS_PER_BATCH = 10;
 
 let client: GoogleGenAI | null = null;
 
@@ -135,10 +137,11 @@ export async function generateLecture(doc: DocumentInput): Promise<Omit<Lecture,
           {
             text:
               "Bạn là một giảng viên đại học giàu kinh nghiệm. Đọc toàn bộ tài liệu bên dưới và biên soạn thành " +
-              "một bài giảng đầy đủ, khoa học, dễ hiểu cho sinh viên. Bài giảng phải bao gồm nhiều phần (sections), " +
-              "mỗi phần có nội dung chi tiết, ví dụ minh họa cụ thể, và lưu ý nếu có. Cuối bài giảng phải có phần " +
-              "tóm tắt giúp sinh viên dễ dàng nắm bài. Chỉ dùng thông tin có trong tài liệu, không bịa thêm kiến thức " +
-              "ngoài tài liệu. Trả lời bằng tiếng Việt.",
+              "một bài giảng khoa học, dễ hiểu cho sinh viên. Bài giảng gồm tối đa 6-8 phần (sections) bao quát " +
+              "các ý chính của tài liệu, mỗi phần trình bày súc tích (khoảng 120-200 từ nội dung), kèm 1-2 ví dụ " +
+              "minh họa cụ thể và lưu ý nếu có. Cuối bài giảng có phần tóm tắt ngắn gọn giúp sinh viên nắm bài. " +
+              "Ưu tiên đầy đủ ý quan trọng nhưng diễn đạt cô đọng, không lan man. Chỉ dùng thông tin có trong tài " +
+              "liệu, không bịa thêm kiến thức ngoài tài liệu. Trả lời bằng tiếng Việt.",
           },
           ...parts,
         ],

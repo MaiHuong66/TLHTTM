@@ -85,7 +85,7 @@ async function handleStep(req: VercelRequest, res: VercelResponse) {
       job.lecture = await generateLecture(doc);
     } else {
       const index = Number(nextStep.replace("batch", ""));
-      const focusHint = QUESTION_FOCUS_HINTS[index] ?? "bao quát các nội dung còn lại của tài liệu";
+      const focusHint = QUESTION_FOCUS_HINTS[index % QUESTION_FOCUS_HINTS.length];
       job.questionBatches[index] = await generateQuestionBatch(doc, index, focusHint);
     }
   } catch (err) {

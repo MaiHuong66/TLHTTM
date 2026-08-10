@@ -23,6 +23,17 @@ interface UploadBody {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+  try {
+    await handleUpload(req, res);
+  } catch (err) {
+    console.error("upload-document unhandled error:", err);
+    if (!res.headersSent) {
+      sendError(res, 500, `Lỗi không xác định: ${friendlyErrorMessage(err)}`);
+    }
+  }
+}
+
+async function handleUpload(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "POST") {
     methodNotAllowed(res, ["POST"]);
     return;
@@ -35,7 +46,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const body = (req.body ?? {}) as UploadBody;
   const pastedText = body.pastedText?.trim() ?? "";
-  const files = body.files ?? [];
+  const files = (body.files ?? []).filter(
+    (f): f is UploadFilePayload =>
+      !!f && typeof f.name === "string" && typeof f.mimeType === "string" && typeof f.base64 === "string"
+  );
+
+  if ((body.files?.length ?? 0) > files.length) {
+    sendError(res, 400, "Một hoặc nhiều file gửi lên bị thiếu dữ liệu. Vui lòng thử chọn lại file.");
+    return;
+  }
 
   if (!pastedText && files.length === 0) {
     sendError(res, 400, "Vui lòng dán nội dung tài liệu hoặc chọn ít nhất 1 file để upload.");
@@ -70,7 +89,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       } else {
         unsupported.push(file.name);
       }
-    } catch {
+    } catch (err) {
+      console.error(`upload-document: failed to parse file "${file.name}":`, err);
       sendError(res, 422, `Không thể đọc file "${file.name}". File có thể bị hỏng hoặc không đúng định dạng.`);
       return;
     }
@@ -95,10 +115,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   ]);
 
   if (lectureResult.status === "rejected") {
+    console.error("upload-document: generateLecture failed:", lectureResult.reason);
     sendError(res, 502, `Lỗi khi tạo bài giảng: ${friendlyErrorMessage(lectureResult.reason)}`);
     return;
   }
   if (questionsResult.status === "rejected") {
+    console.error("upload-document: generateQuestionBank failed:", questionsResult.reason);
     sendError(res, 502, `Lỗi khi sinh ngân hàng câu hỏi: ${friendlyErrorMessage(questionsResult.reason)}`);
     return;
   }
@@ -110,6 +132,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     await setLecture({ ...lectureData, updatedAt: new Date().toISOString() });
     await setQuestions(questions);
   } catch (err) {
+    console.error("upload-document: failed to save to storage:", err);
     sendError(res, 500, `Lỗi khi lưu dữ liệu: ${friendlyErrorMessage(err)}`);
     return;
   }

@@ -88,21 +88,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const doc: DocumentInput = { pastedText, extractedTexts, inlineFiles };
 
-  let lectureData;
-  try {
-    lectureData = await generateLecture(doc);
-  } catch (err) {
-    sendError(res, 502, `Lỗi khi tạo bài giảng: ${friendlyErrorMessage(err)}`);
+  // Chạy song song để tránh vượt giới hạn thời gian thực thi (60s trên gói Hobby của Vercel)
+  const [lectureResult, questionsResult] = await Promise.allSettled([
+    generateLecture(doc),
+    generateQuestionBank(doc),
+  ]);
+
+  if (lectureResult.status === "rejected") {
+    sendError(res, 502, `Lỗi khi tạo bài giảng: ${friendlyErrorMessage(lectureResult.reason)}`);
+    return;
+  }
+  if (questionsResult.status === "rejected") {
+    sendError(res, 502, `Lỗi khi sinh ngân hàng câu hỏi: ${friendlyErrorMessage(questionsResult.reason)}`);
     return;
   }
 
-  let questions;
-  try {
-    questions = await generateQuestionBank(doc);
-  } catch (err) {
-    sendError(res, 502, `Lỗi khi sinh ngân hàng câu hỏi: ${friendlyErrorMessage(err)}`);
-    return;
-  }
+  const lectureData = lectureResult.value;
+  const questions = questionsResult.value;
 
   try {
     await setLecture({ ...lectureData, updatedAt: new Date().toISOString() });

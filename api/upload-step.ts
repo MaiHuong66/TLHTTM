@@ -1,8 +1,16 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { verifyAuthHeader } from "./_lib/auth.js";
-import { deleteUploadJob, getUploadJob, saveUploadJob, setLecture, setQuestions } from "./_lib/kv.js";
+import {
+  deleteUploadJob,
+  getUploadJob,
+  saveUploadJob,
+  setCurrentResultsSheet,
+  setLecture,
+  setQuestions,
+} from "./_lib/kv.js";
 import { QUESTION_FOCUS_HINTS, finalizeQuestions, generateLecture, generateQuestionBatch } from "./_lib/gemini.js";
 import type { DocumentInput } from "./_lib/gemini.js";
+import { buildResultsSheetName, createResultsSheet } from "./_lib/sheets.js";
 import { friendlyErrorMessage, methodNotAllowed, sendError } from "./_lib/http.js";
 import type { UploadStepResponse } from "../shared/types.js";
 
@@ -138,6 +146,17 @@ async function handleStep(req: VercelRequest, res: VercelResponse) {
     console.error(`upload-step: failed to save final data for job ${jobId}:`, err);
     sendError(res, 500, `Lỗi khi lưu dữ liệu: ${friendlyErrorMessage(err)}`);
     return;
+  }
+
+  // Tạo 1 sheet Google Sheets mới để lưu kết quả cho bài giảng mới này, tách biệt với các sheet kết quả
+  // cũ (được giữ nguyên làm lưu trữ, không bị xóa). Nếu bước này lỗi, không làm hỏng toàn bộ upload —
+  // chỉ log lại, app vẫn dùng sheet kết quả trước đó (hoặc sheet mặc định "Results" nếu chưa từng có).
+  try {
+    const newSheetName = buildResultsSheetName(job.lecture.title);
+    await createResultsSheet(newSheetName);
+    await setCurrentResultsSheet(newSheetName);
+  } catch (err) {
+    console.error(`upload-step: failed to create new results sheet for job ${jobId}:`, err);
   }
 
   await deleteUploadJob(jobId);

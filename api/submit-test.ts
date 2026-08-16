@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { getQuestions } from "./_lib/kv.js";
-import { appendResult, hasStudentSubmitted } from "./_lib/sheets.js";
+import { getCurrentResultsSheet, getQuestions } from "./_lib/kv.js";
+import { DEFAULT_RESULTS_SHEET, appendResult, hasStudentSubmitted } from "./_lib/sheets.js";
 import { generateAssessment } from "./_lib/gemini.js";
 import { friendlyErrorMessage, methodNotAllowed, sendError } from "./_lib/http.js";
 import type { AnswerKey, QuizReviewItem, SubmitTestResponse } from "../shared/types.js";
@@ -48,7 +48,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const alreadySubmitted = await hasStudentSubmitted(hoTen, lop);
+    const sheetName = (await getCurrentResultsSheet()) ?? DEFAULT_RESULTS_SHEET;
+
+    const alreadySubmitted = await hasStudentSubmitted(sheetName, hoTen, lop);
     if (alreadySubmitted) {
       sendError(res, 409, "Bạn đã làm bài test này rồi. Mỗi sinh viên chỉ được làm 1 lần.");
       return;
@@ -85,7 +87,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const diem = `${score}/${total}`;
     const thoiGianNop = formatVietnamTime(new Date());
 
-    await appendResult({ hoTen, lop, diem, danhGia, thoiGianNop });
+    await appendResult(sheetName, { hoTen, lop, diem, danhGia, thoiGianNop });
 
     const response: SubmitTestResponse = { score, total, danhGia, review };
     res.status(200).json(response);

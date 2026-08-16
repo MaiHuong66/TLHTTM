@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { verifyAuthHeader } from "./_lib/auth.js";
-import { getAllResults } from "./_lib/sheets.js";
+import { getCurrentResultsSheet } from "./_lib/kv.js";
+import { DEFAULT_RESULTS_SHEET, getAllResults } from "./_lib/sheets.js";
 import { friendlyErrorMessage, methodNotAllowed, sendError } from "./_lib/http.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -15,7 +16,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const results = await getAllResults();
+    const sheetName = (await getCurrentResultsSheet()) ?? DEFAULT_RESULTS_SHEET;
+    const results = await getAllResults(sheetName);
     res.status(200).json({ results });
   } catch (err) {
     sendError(res, 500, friendlyErrorMessage(err));

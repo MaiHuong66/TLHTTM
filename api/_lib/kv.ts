@@ -6,6 +6,7 @@ const LECTURE_KEY = "tlhttm:lecture";
 const QUESTIONS_KEY = "tlhttm:questions";
 const JOB_KEY_PREFIX = "tlhttm:upload-job:";
 const JOB_TTL_SECONDS = 15 * 60;
+const CURRENT_RESULTS_SHEET_KEY = "tlhttm:current-results-sheet";
 
 let redisClient: Redis | null = null;
 
@@ -46,6 +47,18 @@ export async function getQuestions(): Promise<Question[] | null> {
 export async function setQuestions(questions: Question[]): Promise<void> {
   const redis = getClient();
   await redis.set(QUESTIONS_KEY, questions);
+}
+
+/** Tên sheet Google Sheets đang được dùng để lưu kết quả của bài giảng hiện tại. */
+export async function getCurrentResultsSheet(): Promise<string | null> {
+  const redis = getClient();
+  const name = await redis.get<string>(CURRENT_RESULTS_SHEET_KEY);
+  return name ?? null;
+}
+
+export async function setCurrentResultsSheet(sheetName: string): Promise<void> {
+  const redis = getClient();
+  await redis.set(CURRENT_RESULTS_SHEET_KEY, sheetName);
 }
 
 export interface UploadJob {

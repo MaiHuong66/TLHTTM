@@ -52,7 +52,7 @@ src/
 6. Tạo một Google Sheet mới (trống) tại https://sheets.google.com. Bấm **Share**, thêm email ở bước 5 (`GOOGLE_SERVICE_ACCOUNT_EMAIL`) với quyền **Editor**.
 7. Lấy `GOOGLE_SHEET_ID` từ URL của Sheet: `https://docs.google.com/spreadsheets/d/<GOOGLE_SHEET_ID>/edit`.
 
-Sheet `Results` (chứa bảng kết quả) sẽ được ứng dụng tự động tạo ở lần ghi đầu tiên nếu chưa tồn tại — không cần tạo tay.
+Mỗi lần giảng viên upload tài liệu mới thành công, hệ thống tự động tạo **1 sheet (tab) kết quả mới** trong cùng Spreadsheet (tên dạng `KQ <ngày giờ> - <tên bài giảng>`) để lưu kết quả riêng cho bài giảng đó — các sheet kết quả của những lần upload trước vẫn được giữ nguyên làm lưu trữ, không bị xóa. Trang "Kết quả học tập" trên web và việc chống làm-lại-bài-test chỉ áp dụng cho sheet mới nhất (bài giảng hiện hành). Không cần tạo sheet nào bằng tay.
 
 ### 3. Upstash Redis — cho Bài giảng + Ngân hàng câu hỏi
 

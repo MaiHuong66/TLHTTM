@@ -2,7 +2,7 @@ import { google } from "googleapis";
 import type { sheets_v4 } from "googleapis";
 import type { ResultRow } from "../../shared/types.js";
 
-const RESULTS_SHEET = "Results";
+const LEGACY_RESULTS_SHEET = "Results";
 const RESULTS_HEADER = ["STT", "Họ tên", "Lớp", "Điểm", "Đánh giá", "Thời gian nộp"];
 
 let sheetsClient: sheets_v4.Sheets | null = null;
@@ -36,41 +36,68 @@ function getClient(): sheets_v4.Sheets {
   return sheetsClient;
 }
 
-async function ensureResultsSheetExists(): Promise<void> {
+/** Tên sheet Google Sheets không được chứa các ký tự này và tối đa 100 ký tự. */
+export function buildResultsSheetName(lectureTitle: string, date: Date = new Date()): string {
+  const safeTitle = lectureTitle.replace(/[:\\/?*[\]]/g, "").trim();
+  const stamp = date
+    .toLocaleString("vi-VN", {
+      timeZone: "Asia/Ho_Chi_Minh",
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    })
+    .replace(/[:\\/?*[\]]/g, "-");
+  const name = `KQ ${stamp} - ${safeTitle}`;
+  return name.slice(0, 100);
+}
+
+async function ensureResultsSheetExists(sheetName: string): Promise<void> {
   const sheets = getClient();
   const spreadsheetId = getSheetId();
 
   const meta = await sheets.spreadsheets.get({ spreadsheetId });
-  const existing = meta.data.sheets?.some((s) => s.properties?.title === RESULTS_SHEET);
+  const existing = meta.data.sheets?.some((s) => s.properties?.title === sheetName);
 
   if (!existing) {
     await sheets.spreadsheets.batchUpdate({
       spreadsheetId,
       requestBody: {
-        requests: [{ addSheet: { properties: { title: RESULTS_SHEET } } }],
+        requests: [{ addSheet: { properties: { title: sheetName } } }],
       },
     });
     await sheets.spreadsheets.values.update({
       spreadsheetId,
-      range: `${RESULTS_SHEET}!A1:F1`,
+      range: `'${sheetName}'!A1:F1`,
       valueInputOption: "RAW",
       requestBody: { values: [RESULTS_HEADER] },
     });
   }
 }
 
+/** Tạo 1 sheet kết quả mới (dùng khi giảng viên upload tài liệu mới), giữ nguyên các sheet cũ làm lưu trữ. */
+export async function createResultsSheet(sheetName: string): Promise<void> {
+  await ensureResultsSheetExists(sheetName);
+}
+
 function normalizeKey(hoTen: string, lop: string): string {
   return `${hoTen.trim().toLowerCase()}|${lop.trim().toLowerCase()}`;
 }
 
-export async function hasStudentSubmitted(hoTen: string, lop: string): Promise<boolean> {
-  await ensureResultsSheetExists();
+export async function hasStudentSubmitted(
+  sheetName: string,
+  hoTen: string,
+  lop: string
+): Promise<boolean> {
+  await ensureResultsSheetExists(sheetName);
   const sheets = getClient();
   const spreadsheetId = getSheetId();
 
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    range: `${RESULTS_SHEET}!B2:C`,
+    range: `'${sheetName}'!B2:C`,
   });
 
   const rows = res.data.values ?? [];
@@ -78,20 +105,20 @@ export async function hasStudentSubmitted(hoTen: string, lop: string): Promise<b
   return rows.some((row) => normalizeKey(row[0] ?? "", row[1] ?? "") === target);
 }
 
-export async function appendResult(row: Omit<ResultRow, "stt">): Promise<void> {
-  await ensureResultsSheetExists();
+export async function appendResult(sheetName: string, row: Omit<ResultRow, "stt">): Promise<void> {
+  await ensureResultsSheetExists(sheetName);
   const sheets = getClient();
   const spreadsheetId = getSheetId();
 
   const existing = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    range: `${RESULTS_SHEET}!A2:A`,
+    range: `'${sheetName}'!A2:A`,
   });
   const nextStt = (existing.data.values?.length ?? 0) + 1;
 
   await sheets.spreadsheets.values.append({
     spreadsheetId,
-    range: `${RESULTS_SHEET}!A:F`,
+    range: `'${sheetName}'!A:F`,
     valueInputOption: "USER_ENTERED",
     insertDataOption: "INSERT_ROWS",
     requestBody: {
@@ -100,14 +127,14 @@ export async function appendResult(row: Omit<ResultRow, "stt">): Promise<void> {
   });
 }
 
-export async function getAllResults(): Promise<ResultRow[]> {
-  await ensureResultsSheetExists();
+export async function getAllResults(sheetName: string): Promise<ResultRow[]> {
+  await ensureResultsSheetExists(sheetName);
   const sheets = getClient();
   const spreadsheetId = getSheetId();
 
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    range: `${RESULTS_SHEET}!A2:F`,
+    range: `'${sheetName}'!A2:F`,
   });
 
   const rows = res.data.values ?? [];
@@ -122,3 +149,6 @@ export async function getAllResults(): Promise<ResultRow[]> {
       thoiGianNop: r[5] ?? "",
     }));
 }
+
+/** Tên sheet mặc định dùng cho dữ liệu tạo trước khi có tính năng tách sheet theo từng lần upload. */
+export const DEFAULT_RESULTS_SHEET = LEGACY_RESULTS_SHEET;

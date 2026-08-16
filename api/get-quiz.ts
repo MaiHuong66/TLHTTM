@@ -3,7 +3,7 @@ import { getQuestions } from "./_lib/kv.js";
 import { friendlyErrorMessage, methodNotAllowed, sendError } from "./_lib/http.js";
 import type { QuizQuestion } from "../shared/types.js";
 
-const QUIZ_LENGTH = 15;
+const QUIZ_LENGTH = 60;
 
 function shuffle<T>(arr: T[]): T[] {
   const copy = [...arr];

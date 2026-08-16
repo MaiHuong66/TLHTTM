@@ -1,6 +1,6 @@
 # Trợ lý học tập
 
-Hệ thống học tập thông minh dùng Gemini API: giảng viên upload tài liệu, AI tự động tạo bài giảng và ngân hàng ~100 câu hỏi trắc nghiệm; sinh viên xem bài giảng, hỏi chatbot, làm bài kiểm tra 15 câu ngẫu nhiên và nhận kết quả/nhận xét tự động.
+Hệ thống học tập thông minh dùng Gemini API: giảng viên upload tài liệu, AI tự động tạo bài giảng và ngân hàng ~100 câu hỏi trắc nghiệm; sinh viên xem bài giảng, hỏi chatbot, làm bài kiểm tra 60 câu ngẫu nhiên và nhận kết quả/nhận xét tự động.
 
 ## Công nghệ
 
@@ -86,6 +86,6 @@ npx vercel dev
 
 - Vercel Serverless Functions giới hạn dung lượng request khoảng 4.5MB — ứng dụng tự chặn và báo lỗi rõ ràng nếu tổng dung lượng file vượt 4MB (giảng viên nên chia nhỏ tài liệu quá lớn thành nhiều lần upload, lưu ý mỗi lần upload sẽ thay thế hoàn toàn bài giảng + ngân hàng câu hỏi cũ).
 - File PDF/ảnh được upload lên Gemini Files API đúng 1 lần (`api/_lib/gemini.ts#uploadFilesToGemini`) rồi tái sử dụng tham chiếu (`fileUri`) cho các lệnh gọi sau, thay vì gửi lại base64 nhiều lần — tránh crash do quá tải bộ nhớ khi xử lý file lớn.
-- Việc tạo bài giảng + ~100 câu hỏi được chia thành 5 bước độc lập (`api/upload-document.ts` khởi tạo job, `api/upload-step.ts` xử lý từng bước — 1 bài giảng + 4 lô câu hỏi), mỗi bước là 1 lệnh gọi Gemini riêng nên luôn chạy rất nhanh so với giới hạn 60s/lần gọi hàm của gói Hobby. Trạng thái job được lưu tạm trong Redis (TTL 15 phút) để client gọi lặp lại `upload-step` cho tới khi xong — nhờ vậy tổng thời gian xử lý không còn bị chặn bởi trần 60 giây.
+- Việc tạo bài giảng + ~100 câu hỏi được chia thành 11 bước độc lập (`api/upload-document.ts` khởi tạo job, `api/upload-step.ts` xử lý từng bước — 1 bài giảng + 10 lô câu hỏi, mỗi lô 10 câu), mỗi bước là 1 lệnh gọi Gemini riêng nên luôn chạy rất nhanh so với giới hạn 60s/lần gọi hàm của gói Hobby. Trạng thái job được lưu tạm trong Redis (TTL 15 phút) để client gọi lặp lại `upload-step` cho tới khi xong — nhờ vậy tổng thời gian xử lý không còn bị chặn bởi trần 60 giây.
 - Nếu sinh viên truy cập khi giảng viên chưa upload tài liệu nào, hệ thống sẽ hiển thị thông báo rõ ràng thay vì lỗi.
 - Ngân hàng câu hỏi được sinh theo 4 lô (mỗi lô ~25 câu, tập trung khía cạnh khác nhau của tài liệu) rồi lọc trùng — tổng số câu cuối cùng có thể dao động quanh mốc 100 tùy nội dung tài liệu.

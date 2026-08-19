@@ -4,6 +4,7 @@ import type { RawQuestion, UploadedFileRef } from "./gemini.js";
 
 const LECTURE_KEY = "tlhttm:lecture";
 const QUESTIONS_KEY = "tlhttm:questions";
+const EXAM_CONFIG_KEY = "tlhttm:exam-config";
 const JOB_KEY_PREFIX = "tlhttm:upload-job:";
 const JOB_TTL_SECONDS = 15 * 60;
 const CURRENT_RESULTS_SHEET_KEY = "tlhttm:current-results-sheet";
@@ -49,6 +50,22 @@ export async function setQuestions(questions: Question[]): Promise<void> {
   await redis.set(QUESTIONS_KEY, questions);
 }
 
+export interface ExamConfig {
+  numChapters: number;
+  questionsPerChapterInExam: number;
+}
+
+export async function getExamConfig(): Promise<ExamConfig | null> {
+  const redis = getClient();
+  const data = await redis.get<ExamConfig>(EXAM_CONFIG_KEY);
+  return data ?? null;
+}
+
+export async function setExamConfig(config: ExamConfig): Promise<void> {
+  const redis = getClient();
+  await redis.set(EXAM_CONFIG_KEY, config);
+}
+
 /** Tên sheet Google Sheets đang được dùng để lưu kết quả của bài giảng hiện tại. */
 export async function getCurrentResultsSheet(): Promise<string | null> {
   const redis = getClient();
@@ -66,10 +83,16 @@ export interface UploadJob {
   pastedText: string;
   extractedTexts: { name: string; text: string }[];
   uploadedFiles: UploadedFileRef[];
+  numChapters: number;
+  questionsPerChapterInExam: number;
+  /** Bước còn lại: "lecture" hoặc "q:{chương}:{số thứ tự lô trong chương}". */
   steps: string[];
+  /** Số câu cần sinh cho mỗi bước "q:*" (khớp key với `steps`). */
+  stepBatchSizes: Record<string, number>;
   totalSteps: number;
   lecture?: Omit<Lecture, "updatedAt">;
-  questionBatches: RawQuestion[][];
+  /** Kết quả từng lô câu hỏi đã sinh, key khớp với bước trong `steps`/`stepBatchSizes`. */
+  questionBatches: Record<string, RawQuestion[]>;
   error?: string;
 }
 

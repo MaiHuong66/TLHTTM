@@ -25,6 +25,9 @@ function readFileAsBase64(file: File): Promise<string> {
 export function TeacherUploadPage() {
   const [pastedText, setPastedText] = useState("");
   const [files, setFiles] = useState<File[]>([]);
+  const [numChapters, setNumChapters] = useState(1);
+  const [totalBankQuestions, setTotalBankQuestions] = useState(100);
+  const [questionsPerChapterInExam, setQuestionsPerChapterInExam] = useState(60);
   const [loadingMessage, setLoadingMessage] = useState<string | null>(null);
   const { token } = useTeacherAuth();
   const { showToast } = useToast();
@@ -59,7 +62,11 @@ export function TeacherUploadPage() {
         }))
       );
 
-      const { jobId, totalSteps } = await startUpload(token, pastedText, payloadFiles);
+      const { jobId, totalSteps } = await startUpload(token, pastedText, payloadFiles, {
+        numChapters,
+        totalBankQuestions,
+        questionsPerChapterInExam,
+      });
 
       let step: UploadStepResponse = { status: "processing", completedSteps: 0, totalSteps };
       while (step.status === "processing") {
@@ -93,7 +100,7 @@ export function TeacherUploadPage() {
         <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Upload tài liệu</h1>
         <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
           Dán nội dung hoặc tải lên tài liệu (PDF, DOCX, XLSX, PNG, JPG). Hệ thống sẽ tự động tạo bài giảng và ngân
-          hàng ~100 câu hỏi trắc nghiệm, thay thế toàn bộ dữ liệu cũ.
+          hàng câu hỏi trắc nghiệm theo cấu hình bên dưới, thay thế toàn bộ dữ liệu cũ.
         </p>
       </div>
 
@@ -143,6 +150,60 @@ export function TeacherUploadPage() {
               ))}
             </ul>
           )}
+        </div>
+
+        <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-4 space-y-3">
+          <div>
+            <h2 className="font-medium text-slate-800 dark:text-slate-200">Cấu hình ngân hàng câu hỏi & đề thi</h2>
+            <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+              Nếu tài liệu có nhiều chương/phần được đánh dấu rõ ràng (ví dụ "Chương 1", "Chương 2"...), nhập số
+              chương để AI sinh câu hỏi riêng theo từng chương và đề thi lấy đều số câu mỗi chương. Để "Số chương" =
+              1 nếu tài liệu không chia chương.
+            </p>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div>
+              <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Số chương</label>
+              <input
+                type="number"
+                min={1}
+                max={20}
+                value={numChapters}
+                onChange={(e) => setNumChapters(Math.max(1, Number(e.target.value) || 1))}
+                className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">
+                Tổng số câu hỏi ngân hàng
+              </label>
+              <input
+                type="number"
+                min={numChapters}
+                max={500}
+                value={totalBankQuestions}
+                onChange={(e) => setTotalBankQuestions(Math.max(1, Number(e.target.value) || 1))}
+                className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">
+                Số câu {numChapters > 1 ? "mỗi chương " : ""}trong đề thi
+              </label>
+              <input
+                type="number"
+                min={1}
+                max={100}
+                value={questionsPerChapterInExam}
+                onChange={(e) => setQuestionsPerChapterInExam(Math.max(1, Number(e.target.value) || 1))}
+                className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+              />
+            </div>
+          </div>
+          <p className="text-sm text-slate-500 dark:text-slate-400">
+            Tổng số câu trong 1 đề thi: <strong>{numChapters * questionsPerChapterInExam}</strong> câu (
+            {numChapters} chương × {questionsPerChapterInExam} câu/chương)
+          </p>
         </div>
 
         <button

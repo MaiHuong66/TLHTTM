@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { verifyAuthHeader } from "./_lib/auth.js";
 import { saveUploadJob } from "./_lib/kv.js";
 import type { UploadJob } from "./_lib/kv.js";
-import { QUESTION_BATCH_COUNT, uploadFilesToGemini } from "./_lib/gemini.js";
+import { planQuestionBatches, uploadFilesToGemini } from "./_lib/gemini.js";
 import type { DocumentInput } from "./_lib/gemini.js";
 import {
   DOCX_MIME_TYPES,
@@ -20,11 +20,16 @@ import type { StartUploadResponse, UploadFilePayload } from "../shared/types.js"
 export const config = { maxDuration: 60 };
 
 const MAX_TOTAL_RAW_BYTES = 4 * 1024 * 1024;
-const TOTAL_STEPS = 1 + QUESTION_BATCH_COUNT; // 1 bước bài giảng + N bước lô câu hỏi
+const MAX_CHAPTERS = 20;
+const MAX_BANK_QUESTIONS = 500;
+const MAX_EXAM_PER_CHAPTER = 100;
 
 interface UploadBody {
   pastedText?: string;
   files?: UploadFilePayload[];
+  numChapters?: number;
+  totalBankQuestions?: number;
+  questionsPerChapterInExam?: number;
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -36,6 +41,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       sendError(res, 500, `Lỗi không xác định: ${friendlyErrorMessage(err)}`);
     }
   }
+}
+
+function parsePositiveInt(value: unknown, fallback: number, max: number): number {
+  const n = typeof value === "number" ? Math.floor(value) : NaN;
+  if (!Number.isFinite(n) || n < 1) return fallback;
+  return Math.min(n, max);
 }
 
 async function handleStart(req: VercelRequest, res: VercelResponse) {
@@ -65,6 +76,13 @@ async function handleStart(req: VercelRequest, res: VercelResponse) {
     sendError(res, 400, "Vui lòng dán nội dung tài liệu hoặc chọn ít nhất 1 file để upload.");
     return;
   }
+
+  const numChapters = parsePositiveInt(body.numChapters, 1, MAX_CHAPTERS);
+  const totalBankQuestions = Math.max(
+    numChapters,
+    parsePositiveInt(body.totalBankQuestions, 100, MAX_BANK_QUESTIONS)
+  );
+  const questionsPerChapterInExam = parsePositiveInt(body.questionsPerChapterInExam, 60, MAX_EXAM_PER_CHAPTER);
 
   const totalRawBytes = files.reduce((sum, f) => sum + Math.floor((f.base64.length * 3) / 4), 0);
   if (totalRawBytes > MAX_TOTAL_RAW_BYTES) {
@@ -120,15 +138,22 @@ async function handleStart(req: VercelRequest, res: VercelResponse) {
     return;
   }
 
+  const questionSteps = planQuestionBatches(numChapters, totalBankQuestions);
+  const stepBatchSizes: Record<string, number> = {};
+  for (const s of questionSteps) stepBatchSizes[s.key] = s.count;
+
   const jobId = crypto.randomUUID();
   const job: UploadJob = {
     status: "processing",
     pastedText,
     extractedTexts,
     uploadedFiles,
-    steps: ["lecture", ...Array.from({ length: QUESTION_BATCH_COUNT }, (_, i) => `batch${i}`)],
-    totalSteps: TOTAL_STEPS,
-    questionBatches: [],
+    numChapters,
+    questionsPerChapterInExam,
+    steps: ["lecture", ...questionSteps.map((s) => s.key)],
+    stepBatchSizes,
+    totalSteps: 1 + questionSteps.length,
+    questionBatches: {},
   };
 
   try {
@@ -139,6 +164,6 @@ async function handleStart(req: VercelRequest, res: VercelResponse) {
     return;
   }
 
-  const response: StartUploadResponse = { jobId, totalSteps: TOTAL_STEPS };
+  const response: StartUploadResponse = { jobId, totalSteps: job.totalSteps };
   res.status(200).json(response);
 }

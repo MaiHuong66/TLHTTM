@@ -5,6 +5,7 @@ import {
   getUploadJob,
   saveUploadJob,
   setCurrentResultsSheet,
+  setExamConfig,
   setLecture,
   setQuestions,
 } from "./_lib/kv.js";
@@ -92,9 +93,19 @@ async function handleStep(req: VercelRequest, res: VercelResponse) {
     if (nextStep === "lecture") {
       job.lecture = await generateLecture(doc);
     } else {
-      const index = Number(nextStep.replace("batch", ""));
-      const focusHint = QUESTION_FOCUS_HINTS[index % QUESTION_FOCUS_HINTS.length];
-      job.questionBatches[index] = await generateQuestionBatch(doc, index, focusHint);
+      // Step key dạng "q:{chương}:{số thứ tự lô trong chương}"
+      const [, chapterStr, idxStr] = nextStep.split(":");
+      const chapter = Number(chapterStr);
+      const idx = Number(idxStr);
+      const count = job.stepBatchSizes[nextStep] ?? 10;
+      const focusHint = QUESTION_FOCUS_HINTS[idx % QUESTION_FOCUS_HINTS.length];
+      job.questionBatches[nextStep] = await generateQuestionBatch(
+        doc,
+        count,
+        chapter,
+        job.numChapters,
+        focusHint
+      );
     }
   } catch (err) {
     console.error(`upload-step: step "${nextStep}" failed for job ${jobId}:`, err);
@@ -132,7 +143,11 @@ async function handleStep(req: VercelRequest, res: VercelResponse) {
 
   let questions;
   try {
-    questions = finalizeQuestions(job.questionBatches);
+    const batchesForFinalize = Object.entries(job.questionBatches).map(([key, items]) => ({
+      chapter: Number(key.split(":")[1]),
+      items,
+    }));
+    questions = finalizeQuestions(batchesForFinalize);
   } catch (err) {
     console.error(`upload-step: finalizeQuestions failed for job ${jobId}:`, err);
     sendError(res, 500, friendlyErrorMessage(err));
@@ -142,6 +157,7 @@ async function handleStep(req: VercelRequest, res: VercelResponse) {
   try {
     await setLecture({ ...job.lecture, updatedAt: new Date().toISOString() });
     await setQuestions(questions);
+    await setExamConfig({ numChapters: job.numChapters, questionsPerChapterInExam: job.questionsPerChapterInExam });
   } catch (err) {
     console.error(`upload-step: failed to save final data for job ${jobId}:`, err);
     sendError(res, 500, `Lỗi khi lưu dữ liệu: ${friendlyErrorMessage(err)}`);

@@ -5,8 +5,7 @@ import type { AnswerKey, ChatMessage, Lecture, Question } from "../../shared/typ
 const MODEL = "gemini-2.5-flash";
 // Nhiều lô nhỏ thay vì ít lô lớn: mỗi lô nhẹ hơn, ít rủi ro vượt giới hạn 60s/lần gọi hàm
 // khi tài liệu nguồn nặng (PDF nhiều trang/ảnh).
-export const QUESTION_BATCH_COUNT = 10;
-const QUESTIONS_PER_BATCH = 10;
+export const MAX_QUESTIONS_PER_BATCH_CALL = 10;
 
 let client: GoogleGenAI | null = null;
 
@@ -193,13 +192,48 @@ export const QUESTION_FOCUS_HINTS = [
   "tập trung vào tổng hợp và các nội dung còn lại chưa khai thác",
 ];
 
+export interface QuestionBatchStep {
+  key: string;
+  chapter: number;
+  count: number;
+}
+
+/** Chia tổng số câu hỏi ngân hàng thành các lô nhỏ (≤10 câu/lô) theo từng chương để mỗi lệnh
+ * gọi Gemini luôn nhẹ và nhanh, kể cả khi tổng số câu hỏi hoặc số chương lớn. */
+export function planQuestionBatches(numChapters: number, totalBankQuestions: number): QuestionBatchStep[] {
+  const perChapterTarget = Math.max(1, Math.ceil(totalBankQuestions / numChapters));
+  const steps: QuestionBatchStep[] = [];
+
+  for (let chapter = 1; chapter <= numChapters; chapter++) {
+    let remaining = perChapterTarget;
+    let idx = 0;
+    while (remaining > 0) {
+      const count = Math.min(MAX_QUESTIONS_PER_BATCH_CALL, remaining);
+      steps.push({ key: `q:${chapter}:${idx}`, chapter, count });
+      remaining -= count;
+      idx++;
+    }
+  }
+
+  return steps;
+}
+
 export async function generateQuestionBatch(
   doc: DocumentInput,
-  batchIndex: number,
+  count: number,
+  chapter: number,
+  numChapters: number,
   focusHint: string
 ): Promise<RawQuestion[]> {
   const ai = getClient();
   const parts = buildDocumentParts(doc);
+
+  const chapterInstruction =
+    numChapters > 1
+      ? `CHỈ dựa vào nội dung của chương/phần thứ ${chapter} trong tổng số ${numChapters} chương/phần của tài ` +
+        `liệu (phần này thường được đánh dấu là "Chương ${chapter}", "Phần ${chapter}" hoặc tương đương trong ` +
+        `văn bản). TUYỆT ĐỐI KHÔNG dùng nội dung của các chương/phần khác. `
+      : "";
 
   const contents: ContentListUnion = [
     {
@@ -208,7 +242,7 @@ export async function generateQuestionBatch(
         {
           text:
             `Bạn là một chuyên gia ra đề thi trắc nghiệm. Dựa HOÀN TOÀN trên tài liệu bên dưới, hãy soạn đúng ` +
-            `${QUESTIONS_PER_BATCH} câu hỏi trắc nghiệm (đây là lô số ${batchIndex + 1}, hãy ${focusHint}). ` +
+            `${count} câu hỏi trắc nghiệm. ${chapterInstruction}Khi ra đề, hãy ${focusHint}. ` +
             `Mỗi câu hỏi có đúng 4 đáp án A, B, C, D và chỉ 1 đáp án đúng duy nhất. Câu hỏi phải rõ ràng, ` +
             `bám sát nội dung tài liệu, độ khó đa dạng, không được trùng lặp ý với nhau. Trả lời bằng tiếng Việt.`,
         },
@@ -234,14 +268,14 @@ export async function generateQuestionBatch(
   return parsed;
 }
 
-/** Gộp các lô câu hỏi đã sinh (mỗi lô từ 1 lệnh gọi Gemini riêng), khử trùng và gán ID. */
-export function finalizeQuestions(batches: RawQuestion[][]): Question[] {
+/** Gộp các lô câu hỏi đã sinh (mỗi lô từ 1 lệnh gọi Gemini riêng), khử trùng và gán ID + chương. */
+export function finalizeQuestions(batches: { chapter: number; items: RawQuestion[] }[]): Question[] {
   const seen = new Set<string>();
   const questions: Question[] = [];
   let counter = 1;
 
   for (const batch of batches) {
-    for (const raw of batch) {
+    for (const raw of batch.items) {
       const key = raw.question.trim().toLowerCase();
       if (seen.has(key)) continue;
       seen.add(key);
@@ -250,6 +284,7 @@ export function finalizeQuestions(batches: RawQuestion[][]): Question[] {
         question: raw.question,
         options: { A: raw.optionA, B: raw.optionB, C: raw.optionC, D: raw.optionD },
         correctAnswer: raw.correctAnswer,
+        chapter: batch.chapter,
       });
     }
   }

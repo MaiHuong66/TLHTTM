@@ -7,6 +7,7 @@ import type {
   ResultRow,
   StartUploadResponse,
   SubmitTestResponse,
+  UploadConfig,
   UploadFilePayload,
   UploadStepResponse,
 } from "../../shared/types";
@@ -54,12 +55,13 @@ export function teacherLogin(username: string, password: string): Promise<{ toke
 export function startUpload(
   token: string,
   pastedText: string,
-  files: UploadFilePayload[]
+  files: UploadFilePayload[],
+  config: UploadConfig
 ): Promise<StartUploadResponse> {
   return request("/api/upload-document", {
     method: "POST",
     headers: authHeaders(token),
-    body: JSON.stringify({ pastedText, files }),
+    body: JSON.stringify({ pastedText, files, ...config }),
   });
 }
 

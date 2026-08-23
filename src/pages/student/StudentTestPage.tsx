@@ -10,12 +10,6 @@ type Step = "form" | "quiz" | "result" | "blocked";
 
 const OPTION_KEYS: AnswerKey[] = ["A", "B", "C", "D"];
 
-const DIFFICULTY_STYLES: Record<string, string> = {
-  "Cơ bản": "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300",
-  "Trung bình": "bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300",
-  "Nâng cao": "bg-red-100 text-red-700 dark:bg-red-950/50 dark:text-red-300",
-};
-
 export function StudentTestPage() {
   const [step, setStep] = useState<Step>("form");
   const [hoTen, setHoTen] = useState("");
@@ -148,18 +142,9 @@ export function StudentTestPage() {
                 key={q.id}
                 className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-4"
               >
-                <div className="mb-3 flex items-start justify-between gap-2">
-                  <p className="font-medium text-slate-900 dark:text-white">
-                    Câu {idx + 1}. {q.question}
-                  </p>
-                  {q.difficulty && (
-                    <span
-                      className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${DIFFICULTY_STYLES[q.difficulty] ?? ""}`}
-                    >
-                      {q.difficulty}
-                    </span>
-                  )}
-                </div>
+                <p className="mb-3 font-medium text-slate-900 dark:text-white">
+                  Câu {idx + 1}. {q.question}
+                </p>
                 <div className="space-y-2">
                   {OPTION_KEYS.map((key) => (
                     <label

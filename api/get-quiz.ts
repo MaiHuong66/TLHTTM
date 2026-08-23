@@ -5,7 +5,6 @@ import type { Difficulty, Question, QuizQuestion } from "../shared/types.js";
 
 const DEFAULT_QUESTIONS_PER_CHAPTER = 60;
 const DIFFICULTY_ORDER: Difficulty[] = ["Cơ bản", "Trung bình", "Nâng cao"];
-const DIFFICULTY_RANK: Record<Difficulty, number> = { "Cơ bản": 0, "Trung bình": 1, "Nâng cao": 2 };
 
 function shuffle<T>(arr: T[]): T[] {
   const copy = [...arr];
@@ -17,8 +16,8 @@ function shuffle<T>(arr: T[]): T[] {
 }
 
 /** Chọn `total` câu từ `pool`, chia đều theo 3 mức độ khó (bù thiếu hụt nếu 1 mức không đủ câu),
- * rồi sắp theo thứ tự Cơ bản → Trung bình → Nâng cao để mỗi lượt làm bài đi từ dễ đến khó. */
-function pickProgressiveByDifficulty(pool: Question[], total: number): Question[] {
+ * rồi xáo trộn ngẫu nhiên — đề vẫn có đủ cả 3 mức nhưng thứ tự câu không theo dễ-khó. */
+function pickBalancedByDifficulty(pool: Question[], total: number): Question[] {
   const byDifficulty = new Map<Difficulty, Question[]>(DIFFICULTY_ORDER.map((d) => [d, []]));
   for (const q of pool) {
     const difficulty = DIFFICULTY_ORDER.includes(q.difficulty) ? q.difficulty : "Cơ bản";
@@ -41,7 +40,7 @@ function pickProgressiveByDifficulty(pool: Question[], total: number): Question[
     picked.push(...remainingPool.slice(0, stillNeeded));
   }
 
-  return picked.sort((a, b) => DIFFICULTY_RANK[a.difficulty] - DIFFICULTY_RANK[b.difficulty]);
+  return shuffle(picked);
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -72,7 +71,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const selected: Question[] = [];
     for (let chapter = 1; chapter <= numChapters; chapter++) {
       const pool = byChapter.get(chapter) ?? [];
-      selected.push(...pickProgressiveByDifficulty(pool, questionsPerChapter));
+      selected.push(...pickBalancedByDifficulty(pool, questionsPerChapter));
     }
 
     const quiz: QuizQuestion[] = selected.map(({ id, question, options, chapter, difficulty }) => ({

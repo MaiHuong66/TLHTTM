@@ -14,6 +14,8 @@ export interface Lecture {
 
 export type AnswerKey = "A" | "B" | "C" | "D";
 
+export type Difficulty = "Cơ bản" | "Trung bình" | "Nâng cao";
+
 export interface Question {
   id: string;
   question: string;
@@ -21,6 +23,7 @@ export interface Question {
   correctAnswer: AnswerKey;
   /** Số thứ tự chương/phần trong tài liệu (1-based). Bằng 1 nếu tài liệu không chia chương. */
   chapter: number;
+  difficulty: Difficulty;
 }
 
 export type QuizQuestion = Omit<Question, "correctAnswer">;

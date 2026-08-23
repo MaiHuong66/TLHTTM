@@ -1,6 +1,6 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import type { ContentListUnion, Part } from "@google/genai";
-import type { AnswerKey, ChatMessage, Lecture, Question } from "../../shared/types.js";
+import type { AnswerKey, ChatMessage, Difficulty, Lecture, Question } from "../../shared/types.js";
 
 const MODEL = "gemini-2.5-flash";
 // Nhiều lô nhỏ thay vì ít lô lớn: mỗi lô nhẹ hơn, ít rủi ro vượt giới hạn 60s/lần gọi hàm
@@ -171,8 +171,13 @@ const questionBatchSchema = {
       optionC: { type: Type.STRING },
       optionD: { type: Type.STRING },
       correctAnswer: { type: Type.STRING, enum: ["A", "B", "C", "D"] },
+      difficulty: {
+        type: Type.STRING,
+        enum: ["Cơ bản", "Trung bình", "Nâng cao"],
+        description: "Mức độ khó thực sự của câu hỏi này",
+      },
     },
-    required: ["question", "optionA", "optionB", "optionC", "optionD", "correctAnswer"],
+    required: ["question", "optionA", "optionB", "optionC", "optionD", "correctAnswer", "difficulty"],
   },
 };
 
@@ -183,6 +188,7 @@ export interface RawQuestion {
   optionC: string;
   optionD: string;
   correctAnswer: AnswerKey;
+  difficulty: Difficulty;
 }
 
 export const QUESTION_FOCUS_HINTS = [
@@ -223,7 +229,8 @@ export async function generateQuestionBatch(
   count: number,
   chapter: number,
   numChapters: number,
-  focusHint: string
+  focusHint: string,
+  avoidQuestions: string[] = []
 ): Promise<RawQuestion[]> {
   const ai = getClient();
   const parts = buildDocumentParts(doc);
@@ -235,6 +242,14 @@ export async function generateQuestionBatch(
         `văn bản). TUYỆT ĐỐI KHÔNG dùng nội dung của các chương/phần khác. `
       : "";
 
+  const avoidInstruction =
+    avoidQuestions.length > 0
+      ? `\n\nDưới đây là danh sách các câu hỏi ĐÃ ĐƯỢC TẠO TRƯỚC ĐÓ (cùng chương/phần này) — TUYỆT ĐỐI KHÔNG ` +
+        `được tạo câu hỏi trùng lặp hoặc chỉ diễn đạt lại (paraphrase) ý của bất kỳ câu nào trong danh sách này, ` +
+        `phải khai thác khía cạnh/ý khác của tài liệu:\n` +
+        avoidQuestions.map((q, i) => `${i + 1}. ${q}`).join("\n")
+      : "";
+
   const contents: ContentListUnion = [
     {
       role: "user",
@@ -244,7 +259,10 @@ export async function generateQuestionBatch(
             `Bạn là một chuyên gia ra đề thi trắc nghiệm. Dựa HOÀN TOÀN trên tài liệu bên dưới, hãy soạn đúng ` +
             `${count} câu hỏi trắc nghiệm. ${chapterInstruction}Khi ra đề, hãy ${focusHint}. ` +
             `Mỗi câu hỏi có đúng 4 đáp án A, B, C, D và chỉ 1 đáp án đúng duy nhất. Câu hỏi phải rõ ràng, ` +
-            `bám sát nội dung tài liệu, độ khó đa dạng, không được trùng lặp ý với nhau. Trả lời bằng tiếng Việt.`,
+            `bám sát nội dung tài liệu, không được trùng lặp ý với nhau. Đảm bảo pha trộn đa dạng cả 3 mức độ ` +
+            `khó trong số ${count} câu này: "Cơ bản" (nhớ/hiểu kiến thức trực tiếp), "Trung bình" (vận dụng, ` +
+            `giải thích), "Nâng cao" (phân tích, so sánh, suy luận nhiều bước) — gắn đúng nhãn độ khó thực tế cho ` +
+            `từng câu, không gắn đại khái. Trả lời bằng tiếng Việt.${avoidInstruction}`,
         },
         ...parts,
       ],
@@ -285,6 +303,7 @@ export function finalizeQuestions(batches: { chapter: number; items: RawQuestion
         options: { A: raw.optionA, B: raw.optionB, C: raw.optionC, D: raw.optionD },
         correctAnswer: raw.correctAnswer,
         chapter: batch.chapter,
+        difficulty: raw.difficulty,
       });
     }
   }

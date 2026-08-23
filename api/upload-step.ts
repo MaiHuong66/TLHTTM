@@ -99,12 +99,19 @@ async function handleStep(req: VercelRequest, res: VercelResponse) {
       const idx = Number(idxStr);
       const count = job.stepBatchSizes[nextStep] ?? 10;
       const focusHint = QUESTION_FOCUS_HINTS[idx % QUESTION_FOCUS_HINTS.length];
+
+      // Gom câu hỏi đã sinh trước đó trong CÙNG chương để nhắc Gemini tránh trùng/diễn đạt lại.
+      const avoidQuestions = Object.entries(job.questionBatches)
+        .filter(([key]) => Number(key.split(":")[1]) === chapter)
+        .flatMap(([, items]) => items.map((q) => q.question));
+
       job.questionBatches[nextStep] = await generateQuestionBatch(
         doc,
         count,
         chapter,
         job.numChapters,
-        focusHint
+        focusHint,
+        avoidQuestions
       );
     }
   } catch (err) {

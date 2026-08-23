@@ -1,9 +1,11 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { getExamConfig, getQuestions } from "./_lib/kv.js";
 import { friendlyErrorMessage, methodNotAllowed, sendError } from "./_lib/http.js";
-import type { Question, QuizQuestion } from "../shared/types.js";
+import type { Difficulty, Question, QuizQuestion } from "../shared/types.js";
 
 const DEFAULT_QUESTIONS_PER_CHAPTER = 60;
+const DIFFICULTY_ORDER: Difficulty[] = ["Cơ bản", "Trung bình", "Nâng cao"];
+const DIFFICULTY_RANK: Record<Difficulty, number> = { "Cơ bản": 0, "Trung bình": 1, "Nâng cao": 2 };
 
 function shuffle<T>(arr: T[]): T[] {
   const copy = [...arr];
@@ -12,6 +14,34 @@ function shuffle<T>(arr: T[]): T[] {
     [copy[i], copy[j]] = [copy[j], copy[i]];
   }
   return copy;
+}
+
+/** Chọn `total` câu từ `pool`, chia đều theo 3 mức độ khó (bù thiếu hụt nếu 1 mức không đủ câu),
+ * rồi sắp theo thứ tự Cơ bản → Trung bình → Nâng cao để mỗi lượt làm bài đi từ dễ đến khó. */
+function pickProgressiveByDifficulty(pool: Question[], total: number): Question[] {
+  const byDifficulty = new Map<Difficulty, Question[]>(DIFFICULTY_ORDER.map((d) => [d, []]));
+  for (const q of pool) {
+    const difficulty = DIFFICULTY_ORDER.includes(q.difficulty) ? q.difficulty : "Cơ bản";
+    byDifficulty.get(difficulty)!.push(q);
+  }
+
+  const base = Math.floor(total / DIFFICULTY_ORDER.length);
+  const remainder = total % DIFFICULTY_ORDER.length;
+
+  const picked: Question[] = [];
+  DIFFICULTY_ORDER.forEach((d, i) => {
+    const target = base + (i < remainder ? 1 : 0);
+    picked.push(...shuffle(byDifficulty.get(d) ?? []).slice(0, target));
+  });
+
+  const stillNeeded = total - picked.length;
+  if (stillNeeded > 0) {
+    const pickedIds = new Set(picked.map((q) => q.id));
+    const remainingPool = shuffle(pool.filter((q) => !pickedIds.has(q.id)));
+    picked.push(...remainingPool.slice(0, stillNeeded));
+  }
+
+  return picked.sort((a, b) => DIFFICULTY_RANK[a.difficulty] - DIFFICULTY_RANK[b.difficulty]);
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -42,14 +72,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const selected: Question[] = [];
     for (let chapter = 1; chapter <= numChapters; chapter++) {
       const pool = byChapter.get(chapter) ?? [];
-      selected.push(...shuffle(pool).slice(0, questionsPerChapter));
+      selected.push(...pickProgressiveByDifficulty(pool, questionsPerChapter));
     }
 
-    const quiz: QuizQuestion[] = shuffle(selected).map(({ id, question, options, chapter }) => ({
+    const quiz: QuizQuestion[] = selected.map(({ id, question, options, chapter, difficulty }) => ({
       id,
       question,
       options,
       chapter,
+      difficulty,
     }));
 
     res.status(200).json({ questions: quiz });

@@ -118,19 +118,32 @@ export async function extractChapterContent(
 
   const instruction =
     numChapters > 1
-      ? `Đọc toàn bộ tài liệu bên dưới. Trích xuất và trình bày lại ĐẦY ĐỦ, chi tiết nội dung của riêng ` +
-        `chương/phần thứ ${chapter} trong tổng số ${numChapters} chương/phần (phần này thường được đánh dấu ` +
-        `là "Chương ${chapter}", "Phần ${chapter}" hoặc tương đương trong văn bản). Giữ nguyên mọi khái niệm, ` +
-        `định nghĩa, số liệu, ví dụ quan trọng của chương này — không tóm tắt sơ sài, không bỏ sót ý, và ` +
-        `TUYỆT ĐỐI KHÔNG lẫn nội dung của các chương/phần khác vào. Trình bày dưới dạng văn bản thuần, dùng ` +
-        `tiêu đề/gạch đầu dòng nếu cần cho rõ ràng. Trả lời bằng tiếng Việt.`
-      : `Đọc toàn bộ tài liệu bên dưới và trình bày lại ĐẦY ĐỦ, chi tiết toàn bộ nội dung dưới dạng văn bản ` +
-        `thuần, giữ nguyên mọi khái niệm, định nghĩa, số liệu, ví dụ quan trọng. Trả lời bằng tiếng Việt.`;
+      ? `Đọc toàn bộ tài liệu bên dưới. Đây là nhiệm vụ trích xuất nội dung của riêng chương/phần thứ ` +
+        `${chapter} trong tổng số ${numChapters} chương/phần (phần này thường được đánh dấu là "Chương ${chapter}", ` +
+        `"Phần ${chapter}" hoặc tương đương trong văn bản). Thực hiện theo đúng 2 bước sau:\n` +
+        `Bước 1: Liệt kê TẤT CẢ các mục/tiểu mục con (ví dụ ${chapter}.1, ${chapter}.2, ${chapter}.3,...) mà bạn ` +
+        `tìm thấy bên trong chương ${chapter} này, theo đúng thứ tự xuất hiện trong tài liệu.\n` +
+        `Bước 2: LẦN LƯỢT trình bày lại ĐẦY ĐỦ, chi tiết nội dung của TỪNG mục đã liệt kê ở Bước 1 — không được ` +
+        `bỏ sót bất kỳ mục nào, kể cả những mục ở cuối chương. Giữ nguyên mọi khái niệm, định nghĩa, số liệu, ví ` +
+        `dụ quan trọng của từng mục. TUYỆT ĐỐI KHÔNG lẫn nội dung của các chương/phần khác vào.\n` +
+        `Trình bày dưới dạng văn bản thuần, dùng tiêu đề cho từng mục con để rõ ràng. Trả lời bằng tiếng Việt.`
+      : `Đọc toàn bộ tài liệu bên dưới. Liệt kê tất cả các mục/tiểu mục con bạn tìm thấy, sau đó lần lượt trình ` +
+        `bày lại ĐẦY ĐỦ, chi tiết nội dung của TỪNG mục dưới dạng văn bản thuần — không bỏ sót mục nào, giữ ` +
+        `nguyên mọi khái niệm, định nghĩa, số liệu, ví dụ quan trọng. Trả lời bằng tiếng Việt.`;
 
   const response = await ai.models.generateContent({
     model: MODEL,
     contents: [{ role: "user", parts: [{ text: instruction }, ...parts] }],
+    config: { maxOutputTokens: 65536 },
   });
+
+  const finishReason = response.candidates?.[0]?.finishReason;
+  if (finishReason === "MAX_TOKENS") {
+    throw new Error(
+      `Nội dung chương ${chapter} quá dài, không trích xuất đầy đủ được trong 1 lần. ` +
+        `Vui lòng thử lại, hoặc chia tài liệu thành nhiều chương nhỏ hơn/nhiều lần upload.`
+    );
+  }
 
   const text = response.text?.trim();
   if (!text) {

@@ -101,9 +101,14 @@ async function handleStep(req: VercelRequest, res: VercelResponse) {
       const focusHint = QUESTION_FOCUS_HINTS[idx % QUESTION_FOCUS_HINTS.length];
 
       // Gom câu hỏi đã sinh trước đó trong CÙNG chương để nhắc Gemini tránh trùng/diễn đạt lại.
+      // Giới hạn số lượng (lấy các lô GẦN NHẤT) để prompt không phình to dần khi 1 chương có nhiều
+      // lô — nếu không giới hạn, các lô cuối của 1 chương lớn (vd 100 câu/chương) sẽ ngày càng chậm
+      // và có thể vượt 60s.
+      const MAX_AVOID_QUESTIONS = 30;
       const avoidQuestions = Object.entries(job.questionBatches)
         .filter(([key]) => Number(key.split(":")[1]) === chapter)
-        .flatMap(([, items]) => items.map((q) => q.question));
+        .flatMap(([, items]) => items.map((q) => q.question))
+        .slice(-MAX_AVOID_QUESTIONS);
 
       job.questionBatches[nextStep] = await generateQuestionBatch(
         doc,

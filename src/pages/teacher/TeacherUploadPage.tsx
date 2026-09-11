@@ -28,6 +28,8 @@ export function TeacherUploadPage() {
   const [numChapters, setNumChapters] = useState(1);
   const [totalBankQuestions, setTotalBankQuestions] = useState(100);
   const [questionsPerChapterInExam, setQuestionsPerChapterInExam] = useState(60);
+  const [fixedExam, setFixedExam] = useState(false);
+  const [allowRetake, setAllowRetake] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState<string | null>(null);
   const { token } = useTeacherAuth();
   const { showToast } = useToast();
@@ -66,6 +68,8 @@ export function TeacherUploadPage() {
         numChapters,
         totalBankQuestions,
         questionsPerChapterInExam,
+        fixedExam,
+        allowRetake,
       });
 
       let step: UploadStepResponse = { status: "processing", completedSteps: 0, totalSteps };
@@ -195,15 +199,48 @@ export function TeacherUploadPage() {
                 min={1}
                 max={100}
                 value={questionsPerChapterInExam}
+                disabled={fixedExam}
                 onChange={(e) => setQuestionsPerChapterInExam(Math.max(1, Number(e.target.value) || 1))}
-                className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500 disabled:opacity-50"
               />
             </div>
           </div>
+
           <p className="text-sm text-slate-500 dark:text-slate-400">
-            Tổng số câu trong 1 đề thi: <strong>{numChapters * questionsPerChapterInExam}</strong> câu (
-            {numChapters} chương × {questionsPerChapterInExam} câu/chương)
+            {fixedExam ? (
+              <>
+                Đề thi cố định: <strong>{totalBankQuestions}</strong> câu ({numChapters} chương × ~
+                {Math.ceil(totalBankQuestions / numChapters)} câu/chương) — dùng toàn bộ ngân hàng, mọi lượt làm
+                bài đều giống nhau.
+              </>
+            ) : (
+              <>
+                Tổng số câu trong 1 đề thi (random): <strong>{numChapters * questionsPerChapterInExam}</strong> câu
+                ({numChapters} chương × {questionsPerChapterInExam} câu/chương)
+              </>
+            )}
           </p>
+
+          <div className="flex flex-col sm:flex-row gap-3 pt-1">
+            <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+              <input
+                type="checkbox"
+                checked={fixedExam}
+                onChange={(e) => setFixedExam(e.target.checked)}
+                className="h-4 w-4 rounded border-slate-300 dark:border-slate-700"
+              />
+              Đề thi cố định (không random, dùng toàn bộ ngân hàng, giống nhau mỗi lượt làm)
+            </label>
+            <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+              <input
+                type="checkbox"
+                checked={allowRetake}
+                onChange={(e) => setAllowRetake(e.target.checked)}
+                className="h-4 w-4 rounded border-slate-300 dark:border-slate-700"
+              />
+              Cho phép sinh viên làm bài nhiều lần
+            </label>
+          </div>
         </div>
 
         <button

@@ -73,13 +73,23 @@ export interface UploadConfig {
   numChapters: number;
   /** Tổng số câu hỏi trong ngân hàng (chia đều cho các chương). */
   totalBankQuestions: number;
-  /** Số câu hỏi lấy từ MỖI chương khi random đề thi. Với numChapters=1, đây là tổng số câu của đề. */
+  /** Số câu hỏi lấy từ MỖI chương khi random đề thi. Với numChapters=1, đây là tổng số câu của đề.
+   * Bị bỏ qua nếu fixedExam=true. */
   questionsPerChapterInExam: number;
+  /** true: đề thi = TOÀN BỘ ngân hàng câu hỏi, cố định, không random mỗi lần làm. */
+  fixedExam: boolean;
+  /** true: sinh viên được làm bài nhiều lần (không chặn nộp lần 2 trở đi theo Họ tên + Lớp). */
+  allowRetake: boolean;
 }
 
 export interface StartUploadResponse {
   jobId: string;
   totalSteps: number;
+}
+
+export interface ExamInfo {
+  fixedExam: boolean;
+  allowRetake: boolean;
 }
 
 export interface UploadStepResponse {

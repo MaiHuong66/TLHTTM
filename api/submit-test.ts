@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { getCurrentResultsSheet, getQuestions } from "./_lib/kv.js";
+import { getCurrentResultsSheet, getExamConfig, getQuestions } from "./_lib/kv.js";
 import { DEFAULT_RESULTS_SHEET, appendResult, hasStudentSubmitted } from "./_lib/sheets.js";
 import { generateAssessment } from "./_lib/gemini.js";
 import { friendlyErrorMessage, methodNotAllowed, sendError } from "./_lib/http.js";
@@ -49,11 +49,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     const sheetName = (await getCurrentResultsSheet()) ?? DEFAULT_RESULTS_SHEET;
+    const examConfig = await getExamConfig();
 
-    const alreadySubmitted = await hasStudentSubmitted(sheetName, hoTen, lop);
-    if (alreadySubmitted) {
-      sendError(res, 409, "Bạn đã làm bài test này rồi. Mỗi sinh viên chỉ được làm 1 lần.");
-      return;
+    if (!examConfig?.allowRetake) {
+      const alreadySubmitted = await hasStudentSubmitted(sheetName, hoTen, lop);
+      if (alreadySubmitted) {
+        sendError(res, 409, "Bạn đã làm bài test này rồi. Mỗi sinh viên chỉ được làm 1 lần.");
+        return;
+      }
     }
 
     const bank = await getQuestions();

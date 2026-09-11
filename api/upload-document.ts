@@ -30,6 +30,8 @@ interface UploadBody {
   numChapters?: number;
   totalBankQuestions?: number;
   questionsPerChapterInExam?: number;
+  fixedExam?: boolean;
+  allowRetake?: boolean;
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -83,6 +85,8 @@ async function handleStart(req: VercelRequest, res: VercelResponse) {
     parsePositiveInt(body.totalBankQuestions, 100, MAX_BANK_QUESTIONS)
   );
   const questionsPerChapterInExam = parsePositiveInt(body.questionsPerChapterInExam, 60, MAX_EXAM_PER_CHAPTER);
+  const fixedExam = body.fixedExam === true;
+  const allowRetake = body.allowRetake === true;
 
   const totalRawBytes = files.reduce((sum, f) => sum + Math.floor((f.base64.length * 3) / 4), 0);
   if (totalRawBytes > MAX_TOTAL_RAW_BYTES) {
@@ -150,6 +154,8 @@ async function handleStart(req: VercelRequest, res: VercelResponse) {
     uploadedFiles,
     numChapters,
     questionsPerChapterInExam,
+    fixedExam,
+    allowRetake,
     steps: ["lecture", ...questionSteps.map((s) => s.key)],
     stepBatchSizes,
     totalSteps: 1 + questionSteps.length,

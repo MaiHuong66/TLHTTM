@@ -2,6 +2,7 @@ import type {
   AnswerKey,
   ApiErrorBody,
   ChatMessage,
+  ExamInfo,
   Lecture,
   QuizQuestion,
   ResultRow,
@@ -79,6 +80,10 @@ export function fetchLecture(): Promise<{ lecture: Lecture | null }> {
 
 export function fetchQuiz(): Promise<{ questions: QuizQuestion[] }> {
   return request("/api/get-quiz");
+}
+
+export function fetchExamInfo(): Promise<ExamInfo> {
+  return request("/api/get-exam-info");
 }
 
 export function submitTest(

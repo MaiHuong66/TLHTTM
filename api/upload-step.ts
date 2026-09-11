@@ -164,7 +164,12 @@ async function handleStep(req: VercelRequest, res: VercelResponse) {
   try {
     await setLecture({ ...job.lecture, updatedAt: new Date().toISOString() });
     await setQuestions(questions);
-    await setExamConfig({ numChapters: job.numChapters, questionsPerChapterInExam: job.questionsPerChapterInExam });
+    await setExamConfig({
+      numChapters: job.numChapters,
+      questionsPerChapterInExam: job.questionsPerChapterInExam,
+      fixedExam: job.fixedExam,
+      allowRetake: job.allowRetake,
+    });
   } catch (err) {
     console.error(`upload-step: failed to save final data for job ${jobId}:`, err);
     sendError(res, 500, `Lỗi khi lưu dữ liệu: ${friendlyErrorMessage(err)}`);

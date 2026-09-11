@@ -6,6 +6,10 @@ import type { Difficulty, Question, QuizQuestion } from "../shared/types.js";
 const DEFAULT_QUESTIONS_PER_CHAPTER = 60;
 const DIFFICULTY_ORDER: Difficulty[] = ["Cơ bản", "Trung bình", "Nâng cao"];
 
+function questionIdNumber(id: string): number {
+  return Number(id.replace(/[^0-9]/g, "")) || 0;
+}
+
 function shuffle<T>(arr: T[]): T[] {
   const copy = [...arr];
   for (let i = copy.length - 1; i > 0; i--) {
@@ -60,18 +64,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const numChapters = examConfig?.numChapters ?? 1;
     const questionsPerChapter = examConfig?.questionsPerChapterInExam ?? DEFAULT_QUESTIONS_PER_CHAPTER;
 
-    const byChapter = new Map<number, Question[]>();
-    for (const q of questions) {
-      const chapter = q.chapter ?? 1;
-      const list = byChapter.get(chapter) ?? [];
-      list.push(q);
-      byChapter.set(chapter, list);
-    }
+    let selected: Question[];
 
-    const selected: Question[] = [];
-    for (let chapter = 1; chapter <= numChapters; chapter++) {
-      const pool = byChapter.get(chapter) ?? [];
-      selected.push(...pickBalancedByDifficulty(pool, questionsPerChapter));
+    if (examConfig?.fixedExam) {
+      // Đề cố định: dùng TOÀN BỘ ngân hàng câu hỏi, cùng 1 thứ tự ổn định cho mọi lượt làm bài.
+      selected = [...questions].sort((a, b) => {
+        if (a.chapter !== b.chapter) return a.chapter - b.chapter;
+        return questionIdNumber(a.id) - questionIdNumber(b.id);
+      });
+    } else {
+      const byChapter = new Map<number, Question[]>();
+      for (const q of questions) {
+        const chapter = q.chapter ?? 1;
+        const list = byChapter.get(chapter) ?? [];
+        list.push(q);
+        byChapter.set(chapter, list);
+      }
+
+      selected = [];
+      for (let chapter = 1; chapter <= numChapters; chapter++) {
+        const pool = byChapter.get(chapter) ?? [];
+        selected.push(...pickBalancedByDifficulty(pool, questionsPerChapter));
+      }
     }
 
     const quiz: QuizQuestion[] = selected.map(({ id, question, options, chapter, difficulty }) => ({

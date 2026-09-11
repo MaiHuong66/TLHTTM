@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
-import { ApiError, fetchQuiz, submitTest } from "../../lib/api";
+import { ApiError, fetchExamInfo, fetchQuiz, submitTest } from "../../lib/api";
 import { useToast } from "../../context/ToastContext";
 import { LoadingOverlay } from "../../components/LoadingOverlay";
 import { DarkModeToggle } from "../../components/DarkModeToggle";
-import type { AnswerKey, QuizQuestion, SubmitTestResponse } from "../../../shared/types";
+import type { AnswerKey, ExamInfo, QuizQuestion, SubmitTestResponse } from "../../../shared/types";
 
 type Step = "form" | "quiz" | "result" | "blocked";
 
@@ -18,13 +18,20 @@ export function StudentTestPage() {
   const [answers, setAnswers] = useState<Record<string, AnswerKey>>({});
   const [result, setResult] = useState<SubmitTestResponse | null>(null);
   const [loadingMessage, setLoadingMessage] = useState<string | null>(null);
+  const [examInfo, setExamInfo] = useState<ExamInfo | null>(null);
   const { showToast } = useToast();
+
+  useEffect(() => {
+    fetchExamInfo()
+      .then(setExamInfo)
+      .catch(() => setExamInfo({ fixedExam: false, allowRetake: false }));
+  }, []);
 
   async function handleStart(e: FormEvent) {
     e.preventDefault();
     if (!hoTen.trim() || !lop.trim()) return;
 
-    setLoadingMessage("Đang tạo đề bài test ngẫu nhiên...");
+    setLoadingMessage(examInfo?.fixedExam ? "Đang tải đề bài test..." : "Đang tạo đề bài test ngẫu nhiên...");
     try {
       const res = await fetchQuiz();
       setQuiz(res.questions);
@@ -89,7 +96,9 @@ export function StudentTestPage() {
               Thông tin sinh viên
             </h1>
             <p className="text-center text-sm text-slate-500 dark:text-slate-400">
-              Mỗi sinh viên chỉ được làm bài test 1 lần duy nhất.
+              {examInfo?.allowRetake
+                ? "Bạn có thể làm bài test nhiều lần."
+                : "Mỗi sinh viên chỉ được làm bài test 1 lần duy nhất."}
             </p>
             <div>
               <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Họ tên</label>

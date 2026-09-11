@@ -53,6 +53,8 @@ export async function setQuestions(questions: Question[]): Promise<void> {
 export interface ExamConfig {
   numChapters: number;
   questionsPerChapterInExam: number;
+  fixedExam: boolean;
+  allowRetake: boolean;
 }
 
 export async function getExamConfig(): Promise<ExamConfig | null> {
@@ -85,6 +87,8 @@ export interface UploadJob {
   uploadedFiles: UploadedFileRef[];
   numChapters: number;
   questionsPerChapterInExam: number;
+  fixedExam: boolean;
+  allowRetake: boolean;
   /** Bước còn lại: "lecture" hoặc "q:{chương}:{số thứ tự lô trong chương}". */
   steps: string[];
   /** Số câu cần sinh cho mỗi bước "q:*" (khớp key với `steps`). */

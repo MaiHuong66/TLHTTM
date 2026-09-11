@@ -9,7 +9,13 @@ import {
   setLecture,
   setQuestions,
 } from "./_lib/kv.js";
-import { QUESTION_FOCUS_HINTS, finalizeQuestions, generateLecture, generateQuestionBatch } from "./_lib/gemini.js";
+import {
+  QUESTION_FOCUS_HINTS,
+  extractChapterContent,
+  finalizeQuestions,
+  generateLecture,
+  generateQuestionBatch,
+} from "./_lib/gemini.js";
 import type { DocumentInput } from "./_lib/gemini.js";
 import { buildResultsSheetName, createResultsSheet } from "./_lib/sheets.js";
 import { friendlyErrorMessage, methodNotAllowed, sendError } from "./_lib/http.js";
@@ -92,6 +98,10 @@ async function handleStep(req: VercelRequest, res: VercelResponse) {
   try {
     if (nextStep === "lecture") {
       job.lecture = await generateLecture(doc);
+    } else if (nextStep.startsWith("extract:")) {
+      // Đọc toàn bộ tài liệu gốc đúng 1 lần cho chương này, tách lấy riêng phần nội dung của nó.
+      const chapter = Number(nextStep.split(":")[1]);
+      job.chapterTexts[chapter] = await extractChapterContent(doc, chapter, job.numChapters);
     } else {
       // Step key dạng "q:{chương}:{số thứ tự lô trong chương}"
       const [, chapterStr, idxStr] = nextStep.split(":");
@@ -110,8 +120,14 @@ async function handleStep(req: VercelRequest, res: VercelResponse) {
         .flatMap(([, items]) => items.map((q) => q.question))
         .slice(-MAX_AVOID_QUESTIONS);
 
+      // Dùng text đã tách riêng cho chương này (nhanh hơn nhiều) thay vì đọc lại toàn bộ tài liệu gốc.
+      const chapterText = job.chapterTexts[chapter];
+      const chapterDoc: DocumentInput = chapterText
+        ? { pastedText: chapterText, extractedTexts: [], uploadedFiles: [] }
+        : doc;
+
       job.questionBatches[nextStep] = await generateQuestionBatch(
-        doc,
+        chapterDoc,
         count,
         chapter,
         job.numChapters,

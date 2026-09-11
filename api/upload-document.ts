@@ -146,6 +146,8 @@ async function handleStart(req: VercelRequest, res: VercelResponse) {
   const stepBatchSizes: Record<string, number> = {};
   for (const s of questionSteps) stepBatchSizes[s.key] = s.count;
 
+  const extractSteps = Array.from({ length: numChapters }, (_, i) => `extract:${i + 1}`);
+
   const jobId = crypto.randomUUID();
   const job: UploadJob = {
     status: "processing",
@@ -156,9 +158,10 @@ async function handleStart(req: VercelRequest, res: VercelResponse) {
     questionsPerChapterInExam,
     fixedExam,
     allowRetake,
-    steps: ["lecture", ...questionSteps.map((s) => s.key)],
+    steps: ["lecture", ...extractSteps, ...questionSteps.map((s) => s.key)],
     stepBatchSizes,
-    totalSteps: 1 + questionSteps.length,
+    totalSteps: 1 + extractSteps.length + questionSteps.length,
+    chapterTexts: {},
     questionBatches: {},
   };
 

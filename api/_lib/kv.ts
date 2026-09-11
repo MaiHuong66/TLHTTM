@@ -89,12 +89,15 @@ export interface UploadJob {
   questionsPerChapterInExam: number;
   fixedExam: boolean;
   allowRetake: boolean;
-  /** Bước còn lại: "lecture" hoặc "q:{chương}:{số thứ tự lô trong chương}". */
+  /** Bước còn lại: "lecture" | "extract:{chương}" | "q:{chương}:{số thứ tự lô trong chương}". */
   steps: string[];
   /** Số câu cần sinh cho mỗi bước "q:*" (khớp key với `steps`). */
   stepBatchSizes: Record<string, number>;
   totalSteps: number;
   lecture?: Omit<Lecture, "updatedAt">;
+  /** Nội dung text đã tách riêng cho từng chương (key = số chương), dùng cho các lô câu hỏi thay vì
+   * đọc lại toàn bộ tài liệu gốc mỗi lần. */
+  chapterTexts: Record<number, string>;
   /** Kết quả từng lô câu hỏi đã sinh, key khớp với bước trong `steps`/`stepBatchSizes`. */
   questionBatches: Record<string, RawQuestion[]>;
   error?: string;

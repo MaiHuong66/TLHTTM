@@ -3,9 +3,9 @@ import type { ContentListUnion, Part } from "@google/genai";
 import type { AnswerKey, ChatMessage, Difficulty, Lecture, Question } from "../../shared/types.js";
 
 const MODEL = "gemini-2.5-flash";
-// Nhiều lô nhỏ thay vì ít lô lớn: mỗi lô nhẹ hơn, ít rủi ro vượt giới hạn 60s/lần gọi hàm
-// khi tài liệu nguồn nặng (PDF/DOCX nhiều trang) — 6 câu/lô để có biên an toàn rộng hơn so với 60s.
-export const MAX_QUESTIONS_PER_BATCH_CALL = 6;
+// Mỗi lô câu hỏi giờ chỉ đọc phần text đã trích xuất riêng cho chương đó (xem extractChapterContent),
+// không phải đọc lại toàn bộ tài liệu gốc — nên có thể để lô lớn hơn mà vẫn an toàn với trần 60s.
+export const MAX_QUESTIONS_PER_BATCH_CALL = 10;
 
 let client: GoogleGenAI | null = null;
 
@@ -99,6 +99,44 @@ function buildDocumentParts(doc: DocumentInput): Part[] {
   }
 
   return parts;
+}
+
+/**
+ * Đọc toàn bộ tài liệu gốc (file lớn/nhiều chương) đúng 1 lần cho MỖI chương, tách và trình bày lại
+ * đầy đủ nội dung của riêng chương đó dưới dạng text thuần. Sau bước này, các lô sinh câu hỏi của
+ * chương chỉ cần đọc đoạn text nhỏ đã tách sẵn thay vì đọc lại toàn bộ tài liệu gốc mỗi lần — đây là
+ * phần tốn thời gian nhất (không phải việc sinh câu hỏi), nên tách ra giúp giảm hẳn rủi ro vượt 60s
+ * ở các lô về sau khi 1 chương cần nhiều lô.
+ */
+export async function extractChapterContent(
+  doc: DocumentInput,
+  chapter: number,
+  numChapters: number
+): Promise<string> {
+  const ai = getClient();
+  const parts = buildDocumentParts(doc);
+
+  const instruction =
+    numChapters > 1
+      ? `Đọc toàn bộ tài liệu bên dưới. Trích xuất và trình bày lại ĐẦY ĐỦ, chi tiết nội dung của riêng ` +
+        `chương/phần thứ ${chapter} trong tổng số ${numChapters} chương/phần (phần này thường được đánh dấu ` +
+        `là "Chương ${chapter}", "Phần ${chapter}" hoặc tương đương trong văn bản). Giữ nguyên mọi khái niệm, ` +
+        `định nghĩa, số liệu, ví dụ quan trọng của chương này — không tóm tắt sơ sài, không bỏ sót ý, và ` +
+        `TUYỆT ĐỐI KHÔNG lẫn nội dung của các chương/phần khác vào. Trình bày dưới dạng văn bản thuần, dùng ` +
+        `tiêu đề/gạch đầu dòng nếu cần cho rõ ràng. Trả lời bằng tiếng Việt.`
+      : `Đọc toàn bộ tài liệu bên dưới và trình bày lại ĐẦY ĐỦ, chi tiết toàn bộ nội dung dưới dạng văn bản ` +
+        `thuần, giữ nguyên mọi khái niệm, định nghĩa, số liệu, ví dụ quan trọng. Trả lời bằng tiếng Việt.`;
+
+  const response = await ai.models.generateContent({
+    model: MODEL,
+    contents: [{ role: "user", parts: [{ text: instruction }, ...parts] }],
+  });
+
+  const text = response.text?.trim();
+  if (!text) {
+    throw new Error(`Không trích xuất được nội dung chương ${chapter}.`);
+  }
+  return text;
 }
 
 const lectureSchema = {

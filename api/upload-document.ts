@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { verifyAuthHeader } from "./_lib/auth.js";
 import { saveUploadJob } from "./_lib/kv.js";
 import type { UploadJob } from "./_lib/kv.js";
-import { planQuestionBatches, uploadFilesToGemini } from "./_lib/gemini.js";
+import { planExtractionChunksPerChapter, planQuestionBatches, uploadFilesToGemini } from "./_lib/gemini.js";
 import type { DocumentInput } from "./_lib/gemini.js";
 import {
   DOCX_MIME_TYPES,
@@ -146,7 +146,16 @@ async function handleStart(req: VercelRequest, res: VercelResponse) {
   const stepBatchSizes: Record<string, number> = {};
   for (const s of questionSteps) stepBatchSizes[s.key] = s.count;
 
-  const extractSteps = Array.from({ length: numChapters }, (_, i) => `extract:${i + 1}`);
+  // Chia nhỏ việc trích xuất mỗi chương thành nhiều bước (mỗi bước ~1 phần chương) để luôn an toàn
+  // với trần 60s, kể cả khi chương dài — xem planExtractionChunksPerChapter().
+  const docInput: DocumentInput = { pastedText, extractedTexts, uploadedFiles };
+  const extractSteps: string[] = [];
+  for (let chapter = 1; chapter <= numChapters; chapter++) {
+    const chunks = planExtractionChunksPerChapter(docInput, numChapters);
+    for (let chunkIdx = 0; chunkIdx < chunks; chunkIdx++) {
+      extractSteps.push(`extract:${chapter}:${chunkIdx}:${chunks}`);
+    }
+  }
 
   const jobId = crypto.randomUUID();
   const job: UploadJob = {

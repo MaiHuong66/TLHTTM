@@ -101,53 +101,84 @@ function buildDocumentParts(doc: DocumentInput): Part[] {
   return parts;
 }
 
+// Trích xuất mỗi lần khoảng ngần này ký tự nguồn — đủ nhỏ để phản hồi luôn xong an toàn trong 60s,
+// kể cả với chương dài. Càng nhiều ký tự nguồn thì càng cần chia làm nhiều lần trích xuất hơn.
+const SOURCE_CHARS_PER_EXTRACTION_CHUNK = 12000;
+const MIN_CHUNKS_PER_CHAPTER = 2;
+const MAX_CHUNKS_PER_CHAPTER = 8;
+
+/** Số lần trích xuất cần thiết cho mỗi chương — dựa trên độ dài tài liệu đã biết (text dán trực tiếp
+ * hoặc trích từ DOCX/XLSX); nếu tài liệu chỉ có file PDF/ảnh (không biết trước độ dài text), dùng mặc
+ * định an toàn. */
+export function planExtractionChunksPerChapter(doc: DocumentInput, numChapters: number): number {
+  const knownLength = doc.pastedText.length + doc.extractedTexts.reduce((sum, t) => sum + t.text.length, 0);
+  if (knownLength === 0) {
+    return numChapters > 1 ? 4 : 2;
+  }
+  const perChapterChars = knownLength / numChapters;
+  const chunks = Math.ceil(perChapterChars / SOURCE_CHARS_PER_EXTRACTION_CHUNK);
+  return Math.min(MAX_CHUNKS_PER_CHAPTER, Math.max(MIN_CHUNKS_PER_CHAPTER, chunks));
+}
+
 /**
- * Đọc toàn bộ tài liệu gốc (file lớn/nhiều chương) đúng 1 lần cho MỖI chương, tách và trình bày lại
- * đầy đủ nội dung của riêng chương đó dưới dạng text thuần. Sau bước này, các lô sinh câu hỏi của
- * chương chỉ cần đọc đoạn text nhỏ đã tách sẵn thay vì đọc lại toàn bộ tài liệu gốc mỗi lần — đây là
- * phần tốn thời gian nhất (không phải việc sinh câu hỏi), nên tách ra giúp giảm hẳn rủi ro vượt 60s
- * ở các lô về sau khi 1 chương cần nhiều lô.
+ * Đọc toàn bộ tài liệu gốc và trích xuất riêng nội dung của 1 chương, CHIA THÀNH NHIỀU LẦN GỌI nhỏ
+ * (mỗi lần khoảng 1/N chương) thay vì trích xuất toàn bộ chương trong 1 lần — vì trích xuất "đầy đủ"
+ * một chương dài trong 1 lần dễ khiến phản hồi quá dài, vượt giới hạn 60s. Mỗi lần gọi tiếp nối ngay
+ * sau đoạn đã trích xuất ở (các) lần trước (truyền vào qua `previousText`), giúp không lặp/không sót.
+ * Kết quả các lần được nối lại ở nơi gọi (api/upload-step.ts) để thành nội dung đầy đủ của chương.
  */
-export async function extractChapterContent(
+export async function extractChapterChunk(
   doc: DocumentInput,
   chapter: number,
-  numChapters: number
+  numChapters: number,
+  chunkIndex: number,
+  totalChunks: number,
+  previousText: string
 ): Promise<string> {
   const ai = getClient();
   const parts = buildDocumentParts(doc);
 
-  const instruction =
+  const chapterLabel =
     numChapters > 1
-      ? `Đọc toàn bộ tài liệu bên dưới. Đây là nhiệm vụ trích xuất nội dung của riêng chương/phần thứ ` +
-        `${chapter} trong tổng số ${numChapters} chương/phần (phần này thường được đánh dấu là "Chương ${chapter}", ` +
-        `"Phần ${chapter}" hoặc tương đương trong văn bản). Thực hiện theo đúng 2 bước sau:\n` +
-        `Bước 1: Liệt kê TẤT CẢ các mục/tiểu mục con (ví dụ ${chapter}.1, ${chapter}.2, ${chapter}.3,...) mà bạn ` +
-        `tìm thấy bên trong chương ${chapter} này, theo đúng thứ tự xuất hiện trong tài liệu.\n` +
-        `Bước 2: LẦN LƯỢT trình bày lại ĐẦY ĐỦ, chi tiết nội dung của TỪNG mục đã liệt kê ở Bước 1 — không được ` +
-        `bỏ sót bất kỳ mục nào, kể cả những mục ở cuối chương. Giữ nguyên mọi khái niệm, định nghĩa, số liệu, ví ` +
-        `dụ quan trọng của từng mục. TUYỆT ĐỐI KHÔNG lẫn nội dung của các chương/phần khác vào.\n` +
-        `Trình bày dưới dạng văn bản thuần, dùng tiêu đề cho từng mục con để rõ ràng. Trả lời bằng tiếng Việt.`
-      : `Đọc toàn bộ tài liệu bên dưới. Liệt kê tất cả các mục/tiểu mục con bạn tìm thấy, sau đó lần lượt trình ` +
-        `bày lại ĐẦY ĐỦ, chi tiết nội dung của TỪNG mục dưới dạng văn bản thuần — không bỏ sót mục nào, giữ ` +
-        `nguyên mọi khái niệm, định nghĩa, số liệu, ví dụ quan trọng. Trả lời bằng tiếng Việt.`;
+      ? `chương/phần thứ ${chapter} trong tổng số ${numChapters} chương/phần (phần này thường được đánh dấu là ` +
+        `"Chương ${chapter}", "Phần ${chapter}" hoặc tương đương trong văn bản)`
+      : `toàn bộ tài liệu`;
+
+  const previousTail = previousText.trim().slice(-400);
+
+  const positionInstruction =
+    chunkIndex === 0
+      ? `Đây là LẦN TRÍCH XUẤT THỨ 1/${totalChunks} cho ${chapterLabel}. Hãy trích xuất và trình bày lại ĐẦY ĐỦ, ` +
+        `chi tiết khoảng 1/${totalChunks} nội dung ĐẦU TIÊN của phần này, tính từ đầu.`
+      : `Đây là LẦN TRÍCH XUẤT THỨ ${chunkIndex + 1}/${totalChunks} cho ${chapterLabel}. Ở (các) lần trước, bạn đã ` +
+        `trích xuất tới đoạn kết thúc bằng: "...${previousTail}". Hãy tiếp tục trích xuất và trình bày lại ĐẦY ĐỦ, ` +
+        `chi tiết PHẦN TIẾP THEO (không lặp lại nội dung đã trích xuất ở trên), khoảng 1/${totalChunks} nội dung ` +
+        `còn lại.` +
+        (chunkIndex === totalChunks - 1
+          ? ` Đây là LẦN CUỐI CÙNG — phải lấy hết phần còn lại cho tới hết, không được dừng giữa chừng.`
+          : "");
+
+  const instruction =
+    `Đọc toàn bộ tài liệu bên dưới. ${positionInstruction} Giữ nguyên mọi khái niệm, định nghĩa, số liệu, ví dụ ` +
+    `quan trọng. ${numChapters > 1 ? "TUYỆT ĐỐI KHÔNG lẫn nội dung của các chương/phần khác vào. " : ""}` +
+    `Trình bày dưới dạng văn bản thuần, dùng tiêu đề cho từng mục con nếu có để rõ ràng. Trả lời bằng tiếng Việt.`;
 
   const response = await ai.models.generateContent({
     model: MODEL,
     contents: [{ role: "user", parts: [{ text: instruction }, ...parts] }],
-    config: { maxOutputTokens: 65536 },
+    config: { maxOutputTokens: 16384 },
   });
 
   const finishReason = response.candidates?.[0]?.finishReason;
   if (finishReason === "MAX_TOKENS") {
     throw new Error(
-      `Nội dung chương ${chapter} quá dài, không trích xuất đầy đủ được trong 1 lần. ` +
-        `Vui lòng thử lại, hoặc chia tài liệu thành nhiều chương nhỏ hơn/nhiều lần upload.`
+      `Một phần nội dung quá dài, không trích xuất được trong 1 lần (chương ${chapter}, lần ${chunkIndex + 1}/${totalChunks}). Vui lòng thử lại.`
     );
   }
 
   const text = response.text?.trim();
   if (!text) {
-    throw new Error(`Không trích xuất được nội dung chương ${chapter}.`);
+    throw new Error(`Không trích xuất được nội dung (chương ${chapter}, lần ${chunkIndex + 1}/${totalChunks}).`);
   }
   return text;
 }

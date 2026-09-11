@@ -11,7 +11,7 @@ import {
 } from "./_lib/kv.js";
 import {
   QUESTION_FOCUS_HINTS,
-  extractChapterContent,
+  extractChapterChunk,
   finalizeQuestions,
   generateLecture,
   generateQuestionBatch,
@@ -99,9 +99,15 @@ async function handleStep(req: VercelRequest, res: VercelResponse) {
     if (nextStep === "lecture") {
       job.lecture = await generateLecture(doc);
     } else if (nextStep.startsWith("extract:")) {
-      // Đọc toàn bộ tài liệu gốc đúng 1 lần cho chương này, tách lấy riêng phần nội dung của nó.
-      const chapter = Number(nextStep.split(":")[1]);
-      job.chapterTexts[chapter] = await extractChapterContent(doc, chapter, job.numChapters);
+      // Step key dạng "extract:{chương}:{số thứ tự chunk}:{tổng số chunk của chương}"
+      const [, chapterStr, chunkIdxStr, totalChunksStr] = nextStep.split(":");
+      const chapter = Number(chapterStr);
+      const chunkIdx = Number(chunkIdxStr);
+      const totalChunks = Number(totalChunksStr);
+
+      const previousText = job.chapterTexts[chapter] ?? "";
+      const chunkText = await extractChapterChunk(doc, chapter, job.numChapters, chunkIdx, totalChunks, previousText);
+      job.chapterTexts[chapter] = previousText ? `${previousText}\n\n${chunkText}` : chunkText;
     } else {
       // Step key dạng "q:{chương}:{số thứ tự lô trong chương}"
       const [, chapterStr, idxStr] = nextStep.split(":");

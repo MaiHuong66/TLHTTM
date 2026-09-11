@@ -3,11 +3,32 @@ import type { ChangeEvent, FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTeacherAuth } from "../../context/TeacherAuthContext";
 import { useToast } from "../../context/ToastContext";
-import { processUploadStep, startUpload } from "../../lib/api";
+import { ApiError, processUploadStep, startUpload } from "../../lib/api";
 import { LoadingOverlay } from "../../components/LoadingOverlay";
 import type { UploadFilePayload, UploadStepResponse } from "../../../shared/types";
 
 const ACCEPTED_EXT = ".pdf,.docx,.xlsx,.png,.jpg,.jpeg";
+const MAX_STEP_RETRIES = 3;
+
+/**
+ * Khi Vercel ngắt hàm vì hết 60s (504), job trong Redis vẫn còn nguyên trạng thái hợp lệ ở bước đó
+ * (chưa được đánh dấu xong, cũng chưa bị hỏng) vì tiến trình bị giết trước khi kịp lưu lỗi. Vì vậy
+ * cách xử lý đúng là thử gọi lại ĐÚNG bước đó (cùng jobId) thay vì coi cả job là thất bại.
+ */
+async function processStepWithRetry(token: string, jobId: string): Promise<UploadStepResponse> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= MAX_STEP_RETRIES; attempt++) {
+    try {
+      return await processUploadStep(token, jobId);
+    } catch (err) {
+      lastError = err;
+      const isRetryable = err instanceof ApiError && (err.status === 0 || err.status === 504 || err.status >= 500);
+      if (!isRetryable || attempt === MAX_STEP_RETRIES) throw err;
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+    }
+  }
+  throw lastError;
+}
 
 function readFileAsBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -77,7 +98,7 @@ export function TeacherUploadPage() {
         setLoadingMessage(
           `AI đang tạo bài giảng và ngân hàng câu hỏi... (${step.completedSteps}/${step.totalSteps})`
         );
-        step = await processUploadStep(token, jobId);
+        step = await processStepWithRetry(token, jobId);
       }
 
       if (step.status === "failed") {

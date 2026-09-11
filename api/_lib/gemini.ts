@@ -4,8 +4,8 @@ import type { AnswerKey, ChatMessage, Difficulty, Lecture, Question } from "../.
 
 const MODEL = "gemini-2.5-flash";
 // Nhiều lô nhỏ thay vì ít lô lớn: mỗi lô nhẹ hơn, ít rủi ro vượt giới hạn 60s/lần gọi hàm
-// khi tài liệu nguồn nặng (PDF nhiều trang/ảnh).
-export const MAX_QUESTIONS_PER_BATCH_CALL = 10;
+// khi tài liệu nguồn nặng (PDF/DOCX nhiều trang) — 6 câu/lô để có biên an toàn rộng hơn so với 60s.
+export const MAX_QUESTIONS_PER_BATCH_CALL = 6;
 
 let client: GoogleGenAI | null = null;
 

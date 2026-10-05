@@ -51,6 +51,7 @@ export function TeacherUploadPage() {
   const [questionsPerChapterInExam, setQuestionsPerChapterInExam] = useState(60);
   const [fixedExam, setFixedExam] = useState(false);
   const [allowRetake, setAllowRetake] = useState(false);
+  const [timeLimitMinutes, setTimeLimitMinutes] = useState(0);
   const [loadingMessage, setLoadingMessage] = useState<string | null>(null);
   const { token } = useTeacherAuth();
   const { showToast } = useToast();
@@ -91,6 +92,7 @@ export function TeacherUploadPage() {
         questionsPerChapterInExam,
         fixedExam,
         allowRetake,
+        timeLimitMinutes,
       });
 
       let step: UploadStepResponse = { status: "processing", completedSteps: 0, totalSteps };
@@ -261,6 +263,24 @@ export function TeacherUploadPage() {
               />
               Cho phép sinh viên làm bài nhiều lần
             </label>
+          </div>
+
+          <div className="max-w-xs">
+            <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">
+              Giới hạn thời gian làm bài (phút)
+            </label>
+            <input
+              type="number"
+              min={0}
+              max={600}
+              value={timeLimitMinutes}
+              onChange={(e) => setTimeLimitMinutes(Math.max(0, Number(e.target.value) || 0))}
+              className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+            />
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              Tính từ lúc sinh viên bấm "Bắt đầu làm bài"; hết giờ hệ thống tự động nộp bài. Nhập 0 nếu không giới
+              hạn.
+            </p>
           </div>
         </div>
 

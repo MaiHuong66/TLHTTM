@@ -23,6 +23,7 @@ const MAX_TOTAL_RAW_BYTES = 4 * 1024 * 1024;
 const MAX_CHAPTERS = 20;
 const MAX_BANK_QUESTIONS = 500;
 const MAX_EXAM_PER_CHAPTER = 100;
+const MAX_TIME_LIMIT_MINUTES = 600;
 
 interface UploadBody {
   pastedText?: string;
@@ -32,6 +33,7 @@ interface UploadBody {
   questionsPerChapterInExam?: number;
   fixedExam?: boolean;
   allowRetake?: boolean;
+  timeLimitMinutes?: number;
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -87,6 +89,9 @@ async function handleStart(req: VercelRequest, res: VercelResponse) {
   const questionsPerChapterInExam = parsePositiveInt(body.questionsPerChapterInExam, 60, MAX_EXAM_PER_CHAPTER);
   const fixedExam = body.fixedExam === true;
   const allowRetake = body.allowRetake === true;
+  // 0 = không giới hạn; giá trị không hợp lệ cũng coi là không giới hạn.
+  const rawLimit = typeof body.timeLimitMinutes === "number" ? Math.floor(body.timeLimitMinutes) : 0;
+  const timeLimitMinutes = rawLimit >= 1 ? Math.min(rawLimit, MAX_TIME_LIMIT_MINUTES) : 0;
 
   const totalRawBytes = files.reduce((sum, f) => sum + Math.floor((f.base64.length * 3) / 4), 0);
   if (totalRawBytes > MAX_TOTAL_RAW_BYTES) {
@@ -167,6 +172,7 @@ async function handleStart(req: VercelRequest, res: VercelResponse) {
     questionsPerChapterInExam,
     fixedExam,
     allowRetake,
+    timeLimitMinutes,
     steps: ["lecture", ...extractSteps, ...questionSteps.map((s) => s.key)],
     stepBatchSizes,
     totalSteps: 1 + extractSteps.length + questionSteps.length,

@@ -14,6 +14,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const info: ExamInfo = {
       fixedExam: examConfig?.fixedExam ?? false,
       allowRetake: examConfig?.allowRetake ?? false,
+      timeLimitMinutes: examConfig?.timeLimitMinutes ?? 0,
     };
     res.status(200).json(info);
   } catch (err) {

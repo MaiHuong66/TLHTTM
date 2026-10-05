@@ -55,6 +55,8 @@ export interface ExamConfig {
   questionsPerChapterInExam: number;
   fixedExam: boolean;
   allowRetake: boolean;
+  /** 0 hoặc undefined (dữ liệu cũ) = không giới hạn thời gian. */
+  timeLimitMinutes?: number;
 }
 
 export async function getExamConfig(): Promise<ExamConfig | null> {
@@ -89,6 +91,7 @@ export interface UploadJob {
   questionsPerChapterInExam: number;
   fixedExam: boolean;
   allowRetake: boolean;
+  timeLimitMinutes: number;
   /** Bước còn lại: "lecture" | "extract:{chương}" | "q:{chương}:{số thứ tự lô trong chương}". */
   steps: string[];
   /** Số câu cần sinh cho mỗi bước "q:*" (khớp key với `steps`). */
@@ -117,4 +120,78 @@ export async function getUploadJob(jobId: string): Promise<UploadJob | null> {
 export async function deleteUploadJob(jobId: string): Promise<void> {
   const redis = getClient();
   await redis.del(`${JOB_KEY_PREFIX}${jobId}`);
+}
+
+/** Một lượt làm bài của sinh viên, tạo ở server khi sinh viên bấm bắt đầu. Server là nguồn tin cậy cho
+ * thời điểm bắt đầu và danh sách câu hỏi (client không thể tự đổi giờ hay tự chọn câu để chấm). */
+export interface QuizAttempt {
+  attemptId: string;
+  hoTen: string;
+  lop: string;
+  sheetName: string;
+  startedAt: number;
+  timeLimitSeconds: number;
+  questionIds: string[];
+  submitted: boolean;
+}
+
+const ATTEMPT_KEY_PREFIX = "tlhttm:attempt:";
+const ATTEMPT_STUDENT_KEY_PREFIX = "tlhttm:attempt-student:";
+const ATTEMPT_LOCK_KEY_PREFIX = "tlhttm:attempt-lock:";
+const SUBMIT_LOCK_SECONDS = 120;
+
+export function attemptTtlSeconds(timeLimitSeconds: number): number {
+  return timeLimitSeconds > 0 ? timeLimitSeconds + 24 * 3600 : 7 * 24 * 3600;
+}
+
+export async function saveAttempt(attempt: QuizAttempt): Promise<void> {
+  const redis = getClient();
+  await redis.set(`${ATTEMPT_KEY_PREFIX}${attempt.attemptId}`, attempt, {
+    ex: attemptTtlSeconds(attempt.timeLimitSeconds),
+  });
+}
+
+export async function getAttempt(attemptId: string): Promise<QuizAttempt | null> {
+  const redis = getClient();
+  const data = await redis.get<QuizAttempt>(`${ATTEMPT_KEY_PREFIX}${attemptId}`);
+  return data ?? null;
+}
+
+/** Chỉ mục "sinh viên -> lượt làm bài gần nhất" (theo từng sheet kết quả), dùng để cho tiếp tục lượt làm
+ * dở và chặn bắt đầu lại để lấy thêm thời gian khi đề chỉ cho làm 1 lần. */
+export async function getAttemptIdForStudent(sheetName: string, studentKey: string): Promise<string | null> {
+  const redis = getClient();
+  const id = await redis.get<string>(`${ATTEMPT_STUDENT_KEY_PREFIX}${sheetName}|${studentKey}`);
+  return id ?? null;
+}
+
+/** Giành chỉ mục "sinh viên -> lượt làm bài" bằng SET NX; trả về id lượt đang giữ chỉ mục (của mình nếu thắng). */
+export async function claimAttemptForStudent(
+  sheetName: string,
+  studentKey: string,
+  attemptId: string,
+  ttlSeconds: number
+): Promise<string> {
+  const redis = getClient();
+  const key = `${ATTEMPT_STUDENT_KEY_PREFIX}${sheetName}|${studentKey}`;
+  const res = await redis.set(key, attemptId, { nx: true, ex: ttlSeconds });
+  if (res === "OK") return attemptId;
+  return (await redis.get<string>(key)) ?? attemptId;
+}
+
+export async function deleteAttemptIdForStudent(sheetName: string, studentKey: string): Promise<void> {
+  const redis = getClient();
+  await redis.del(`${ATTEMPT_STUDENT_KEY_PREFIX}${sheetName}|${studentKey}`);
+}
+
+/** Khóa ngắn hạn chống nộp bài trùng cùng lúc cho 1 lượt (vd vừa tự động nộp khi hết giờ vừa bấm nộp tay). */
+export async function acquireSubmitLock(attemptId: string): Promise<boolean> {
+  const redis = getClient();
+  const res = await redis.set(`${ATTEMPT_LOCK_KEY_PREFIX}${attemptId}`, "1", { nx: true, ex: SUBMIT_LOCK_SECONDS });
+  return res === "OK";
+}
+
+export async function releaseSubmitLock(attemptId: string): Promise<void> {
+  const redis = getClient();
+  await redis.del(`${ATTEMPT_LOCK_KEY_PREFIX}${attemptId}`);
 }

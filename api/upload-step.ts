@@ -196,6 +196,7 @@ async function handleStep(req: VercelRequest, res: VercelResponse) {
       questionsPerChapterInExam: job.questionsPerChapterInExam,
       fixedExam: job.fixedExam,
       allowRetake: job.allowRetake,
+      timeLimitMinutes: job.timeLimitMinutes ?? 0,
     });
   } catch (err) {
     console.error(`upload-step: failed to save final data for job ${jobId}:`, err);

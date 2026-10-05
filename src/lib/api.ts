@@ -4,8 +4,8 @@ import type {
   ChatMessage,
   ExamInfo,
   Lecture,
-  QuizQuestion,
   ResultRow,
+  StartQuizResponse,
   StartUploadResponse,
   SubmitTestResponse,
   UploadConfig,
@@ -78,24 +78,24 @@ export function fetchLecture(): Promise<{ lecture: Lecture | null }> {
   return request("/api/get-lecture");
 }
 
-export function fetchQuiz(): Promise<{ questions: QuizQuestion[] }> {
-  return request("/api/get-quiz");
+/** Bắt đầu (hoặc tiếp tục) 1 lượt làm bài: server ghi nhận thời điểm bắt đầu và chọn bộ câu hỏi. */
+export function startQuiz(hoTen: string, lop: string): Promise<StartQuizResponse> {
+  return request("/api/get-quiz", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ hoTen, lop }),
+  });
 }
 
 export function fetchExamInfo(): Promise<ExamInfo> {
   return request("/api/get-exam-info");
 }
 
-export function submitTest(
-  hoTen: string,
-  lop: string,
-  questionIds: string[],
-  answers: Record<string, AnswerKey>
-): Promise<SubmitTestResponse> {
+export function submitTest(attemptId: string, answers: Record<string, AnswerKey>): Promise<SubmitTestResponse> {
   return request("/api/submit-test", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ hoTen, lop, questionIds, answers }),
+    body: JSON.stringify({ attemptId, answers }),
   });
 }
 

@@ -80,6 +80,8 @@ export interface UploadConfig {
   fixedExam: boolean;
   /** true: sinh viên được làm bài nhiều lần (không chặn nộp lần 2 trở đi theo Họ tên + Lớp). */
   allowRetake: boolean;
+  /** Giới hạn thời gian làm bài (phút), tính từ lúc sinh viên bấm bắt đầu. 0 = không giới hạn. */
+  timeLimitMinutes: number;
 }
 
 export interface StartUploadResponse {
@@ -90,6 +92,18 @@ export interface StartUploadResponse {
 export interface ExamInfo {
   fixedExam: boolean;
   allowRetake: boolean;
+  timeLimitMinutes: number;
+}
+
+export interface StartQuizResponse {
+  attemptId: string;
+  questions: QuizQuestion[];
+  /** Tổng thời gian cho phép (giây). 0 = không giới hạn. */
+  timeLimitSeconds: number;
+  /** Thời gian còn lại (giây) tại thời điểm server trả về. Bằng timeLimitSeconds với lượt làm mới. */
+  remainingSeconds: number;
+  /** true nếu đây là lượt làm bài đã bắt đầu trước đó và được tiếp tục (không random lại đề). */
+  resumed: boolean;
 }
 
 export interface UploadStepResponse {

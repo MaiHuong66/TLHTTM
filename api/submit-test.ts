@@ -1,16 +1,26 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { getCurrentResultsSheet, getExamConfig, getQuestions } from "./_lib/kv.js";
-import { DEFAULT_RESULTS_SHEET, appendResult, hasStudentSubmitted } from "./_lib/sheets.js";
+import {
+  acquireSubmitLock,
+  getAttempt,
+  getAttemptIdForStudent,
+  getExamConfig,
+  getQuestions,
+  releaseSubmitLock,
+  saveAttempt,
+} from "./_lib/kv.js";
+import { appendResult } from "./_lib/sheets.js";
 import { generateAssessment } from "./_lib/gemini.js";
+import { normalizeStudentKey } from "./_lib/identity.js";
 import { friendlyErrorMessage, methodNotAllowed, sendError } from "./_lib/http.js";
 import type { AnswerKey, QuizReviewItem, SubmitTestResponse } from "../shared/types.js";
 
 export const config = { maxDuration: 30 };
 
+// Cho phép trễ một chút so với hạn chót để bù độ trễ mạng/tự động nộp khi hết giờ và các lần thử lại.
+const SUBMIT_GRACE_MS = 60 * 1000;
+
 interface SubmitBody {
-  hoTen?: string;
-  lop?: string;
-  questionIds?: string[];
+  attemptId?: string;
   answers?: Record<string, AnswerKey>;
 }
 
@@ -33,28 +43,40 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   const body = (req.body ?? {}) as SubmitBody;
-  const hoTen = body.hoTen?.trim();
-  const lop = body.lop?.trim();
-  const questionIds = body.questionIds;
+  const attemptId = typeof body.attemptId === "string" ? body.attemptId : "";
   const answers = body.answers ?? {};
 
-  if (!hoTen || !lop) {
-    sendError(res, 400, "Vui lòng nhập đầy đủ họ tên và lớp.");
-    return;
-  }
-  if (!Array.isArray(questionIds) || questionIds.length === 0) {
-    sendError(res, 400, "Thiếu danh sách câu hỏi của bài test.");
+  if (!attemptId) {
+    sendError(res, 400, "Thiếu mã lượt làm bài. Vui lòng tải lại trang và bắt đầu lại.");
     return;
   }
 
+  let lockAcquired = false;
   try {
-    const sheetName = (await getCurrentResultsSheet()) ?? DEFAULT_RESULTS_SHEET;
-    const examConfig = await getExamConfig();
+    const attempt = await getAttempt(attemptId);
+    if (!attempt) {
+      sendError(res, 404, "Lượt làm bài không tồn tại hoặc đã hết hạn. Vui lòng tải lại trang và bắt đầu lại.");
+      return;
+    }
+    if (attempt.submitted) {
+      sendError(res, 409, "Bài làm này đã được nộp rồi.");
+      return;
+    }
 
+    // Thời gian tính theo đồng hồ của server từ lúc bắt đầu — client không thể tự kéo dài.
+    if (attempt.timeLimitSeconds > 0) {
+      const elapsedMs = Date.now() - attempt.startedAt;
+      if (elapsedMs > attempt.timeLimitSeconds * 1000 + SUBMIT_GRACE_MS) {
+        sendError(res, 403, "Đã quá thời gian làm bài nên bài làm không được ghi nhận.");
+        return;
+      }
+    }
+
+    const examConfig = await getExamConfig();
     if (!examConfig?.allowRetake) {
-      const alreadySubmitted = await hasStudentSubmitted(sheetName, hoTen, lop);
-      if (alreadySubmitted) {
-        sendError(res, 409, "Bạn đã làm bài test này rồi. Mỗi sinh viên chỉ được làm 1 lần.");
+      const currentId = await getAttemptIdForStudent(attempt.sheetName, normalizeStudentKey(attempt.hoTen, attempt.lop));
+      if (currentId && currentId !== attempt.attemptId) {
+        sendError(res, 409, "Bạn đã mở bài làm này ở một cửa sổ khác. Vui lòng nộp bài ở cửa sổ đó.");
         return;
       }
     }
@@ -69,7 +91,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let score = 0;
     const review: QuizReviewItem[] = [];
 
-    for (const id of questionIds) {
+    // Chấm theo danh sách câu hỏi server đã giao cho lượt này, không dựa vào danh sách client gửi lên.
+    for (const id of attempt.questionIds) {
       const question = bankById.get(id);
       if (!question) continue;
       const chosen = answers[id] ?? null;
@@ -86,15 +109,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const total = review.length;
-    const danhGia = await generateAssessment(score, total);
+    if (total === 0) {
+      sendError(res, 409, "Đề thi đã được giảng viên cập nhật. Vui lòng tải lại trang và làm lại bài.");
+      return;
+    }
+
+    // Chống nộp trùng cùng lúc (vd vừa tự động nộp khi hết giờ vừa bấm nộp tay).
+    lockAcquired = await acquireSubmitLock(attempt.attemptId);
+    if (!lockAcquired) {
+      sendError(res, 409, "Bài làm đang được xử lý, vui lòng đợi trong giây lát.");
+      return;
+    }
+
     const diem = `${score}/${total}`;
+    // Nhận xét do AI viết chỉ là phần phụ — nếu Gemini lỗi thì vẫn phải ghi nhận điểm của sinh viên.
+    const danhGia = await generateAssessment(score, total).catch(() => `Bạn đạt ${diem} câu đúng.`);
     const thoiGianNop = formatVietnamTime(new Date());
 
-    await appendResult(sheetName, { hoTen, lop, diem, danhGia, thoiGianNop });
+    await appendResult(attempt.sheetName, { hoTen: attempt.hoTen, lop: attempt.lop, diem, danhGia, thoiGianNop });
+    await saveAttempt({ ...attempt, submitted: true });
 
     const response: SubmitTestResponse = { score, total, danhGia, review };
     res.status(200).json(response);
   } catch (err) {
+    // Lỗi trước khi ghi nhận xong: nhả khóa để sinh viên (hoặc client tự thử lại) nộp lại được.
+    if (lockAcquired) await releaseSubmitLock(attemptId).catch(() => undefined);
     sendError(res, 500, friendlyErrorMessage(err));
   }
 }

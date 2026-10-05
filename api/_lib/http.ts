@@ -20,6 +20,9 @@ export function friendlyErrorMessage(err: unknown): string {
     if (/KV_REST_API|UPSTASH_REDIS/i.test(err.message)) {
       return "Lỗi cấu hình: chưa thiết lập thông tin lưu trữ (Upstash Redis) trên máy chủ.";
     }
+    if (/overloaded|high demand|UNAVAILABLE|\b503\b/i.test(err.message)) {
+      return "Gemini đang quá tải tạm thời. Vui lòng thử lại sau ít phút.";
+    }
     if (/quota|rate limit|429/i.test(err.message)) {
       return "Gemini API đang bị giới hạn tần suất (rate limit). Vui lòng thử lại sau ít phút.";
     }

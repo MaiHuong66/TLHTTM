@@ -8,23 +8,29 @@ import { LoadingOverlay } from "../../components/LoadingOverlay";
 import type { UploadFilePayload, UploadStepResponse } from "../../../shared/types";
 
 const ACCEPTED_EXT = ".pdf,.docx,.xlsx,.png,.jpg,.jpeg";
-const MAX_STEP_RETRIES = 3;
+const MAX_STEP_RETRIES = 6;
 
 /**
- * Khi Vercel ngắt hàm vì hết 60s (504), job trong Redis vẫn còn nguyên trạng thái hợp lệ ở bước đó
- * (chưa được đánh dấu xong, cũng chưa bị hỏng) vì tiến trình bị giết trước khi kịp lưu lỗi. Vì vậy
- * cách xử lý đúng là thử gọi lại ĐÚNG bước đó (cùng jobId) thay vì coi cả job là thất bại.
+ * Khi 1 bước bị lỗi tạm thời — Vercel ngắt hàm vì hết 60s (504), Gemini quá tải (503), mạng chập chờn —
+ * job trong Redis vẫn còn nguyên trạng thái hợp lệ ở bước đó (kết quả chỉ được lưu khi bước thành công).
+ * Vì vậy cách xử lý đúng là chờ rồi gọi lại ĐÚNG bước đó (cùng jobId), chờ lâu dần, thay vì coi cả lượt
+ * upload (có thể đã chạy nhiều phút) là thất bại.
  */
-async function processStepWithRetry(token: string, jobId: string): Promise<UploadStepResponse> {
+async function processStepWithRetry(
+  token: string,
+  jobId: string,
+  onRetry: (attempt: number) => void
+): Promise<UploadStepResponse> {
   let lastError: unknown;
   for (let attempt = 0; attempt <= MAX_STEP_RETRIES; attempt++) {
     try {
       return await processUploadStep(token, jobId);
     } catch (err) {
       lastError = err;
-      const isRetryable = err instanceof ApiError && (err.status === 0 || err.status === 504 || err.status >= 500);
+      const isRetryable = err instanceof ApiError && (err.status === 0 || err.status >= 500);
       if (!isRetryable || attempt === MAX_STEP_RETRIES) throw err;
-      await new Promise((resolve) => setTimeout(resolve, 1500));
+      onRetry(attempt + 1);
+      await new Promise((resolve) => setTimeout(resolve, Math.min(2000 * (attempt + 1), 10000)));
     }
   }
   throw lastError;
@@ -97,10 +103,13 @@ export function TeacherUploadPage() {
 
       let step: UploadStepResponse = { status: "processing", completedSteps: 0, totalSteps };
       while (step.status === "processing") {
-        setLoadingMessage(
-          `AI đang tạo bài giảng và ngân hàng câu hỏi... (${step.completedSteps}/${step.totalSteps})`
+        const progress = `(${step.completedSteps}/${step.totalSteps})`;
+        setLoadingMessage(`AI đang tạo bài giảng và ngân hàng câu hỏi... ${progress}`);
+        step = await processStepWithRetry(token, jobId, (n) =>
+          setLoadingMessage(
+            `Gemini đang bận hoặc mạng chập chờn, tự thử lại bước này (lần ${n}/${MAX_STEP_RETRIES})... ${progress}`
+          )
         );
-        step = await processStepWithRetry(token, jobId);
       }
 
       if (step.status === "failed") {

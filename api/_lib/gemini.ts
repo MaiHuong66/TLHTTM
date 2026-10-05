@@ -1,6 +1,7 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import type { ContentListUnion, Part } from "@google/genai";
 import type { AnswerKey, ChatMessage, Difficulty, Lecture, Question } from "../../shared/types.js";
+import { withRetry } from "./retry.js";
 
 const MODEL = "gemini-2.5-flash";
 // Mỗi lô câu hỏi giờ chỉ đọc phần text đã trích xuất riêng cho chương đó (xem extractChapterContent),
@@ -8,6 +9,11 @@ const MODEL = "gemini-2.5-flash";
 export const MAX_QUESTIONS_PER_BATCH_CALL = 10;
 
 let client: GoogleGenAI | null = null;
+
+/** generateContent có tự thử lại khi Gemini quá tải/lỗi tạm thời (503, 429 theo phút, lỗi mạng...). */
+function generate(ai: GoogleGenAI, params: Parameters<GoogleGenAI["models"]["generateContent"]>[0]) {
+  return withRetry(() => ai.models.generateContent(params));
+}
 
 function getClient(): GoogleGenAI {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -50,10 +56,12 @@ export async function uploadFilesToGemini(
     files.map(async (f) => {
       const buffer = Buffer.from(f.base64, "base64");
       const blob = new Blob([buffer], { type: f.mimeType });
-      const uploaded = await ai.files.upload({
-        file: blob,
-        config: { mimeType: f.mimeType, displayName: f.name },
-      });
+      const uploaded = await withRetry(() =>
+        ai.files.upload({
+          file: blob,
+          config: { mimeType: f.mimeType, displayName: f.name },
+        })
+      );
       return waitForFileActive(ai, uploaded, f.name);
     })
   );
@@ -163,7 +171,7 @@ export async function extractChapterChunk(
     `quan trọng. ${numChapters > 1 ? "TUYỆT ĐỐI KHÔNG lẫn nội dung của các chương/phần khác vào. " : ""}` +
     `Trình bày dưới dạng văn bản thuần, dùng tiêu đề cho từng mục con nếu có để rõ ràng. Trả lời bằng tiếng Việt.`;
 
-  const response = await ai.models.generateContent({
+  const response = await generate(ai, {
     model: MODEL,
     contents: [{ role: "user", parts: [{ text: instruction }, ...parts] }],
     config: { maxOutputTokens: 16384 },
@@ -209,7 +217,7 @@ export async function generateLecture(doc: DocumentInput): Promise<Omit<Lecture,
   const ai = getClient();
   const parts = buildDocumentParts(doc);
 
-  const response = await ai.models.generateContent({
+  const response = await generate(ai, {
     model: MODEL,
     contents: [
       {
@@ -351,7 +359,7 @@ export async function generateQuestionBatch(
     },
   ];
 
-  const response = await ai.models.generateContent({
+  const response = await generate(ai, {
     model: MODEL,
     contents,
     config: {
@@ -416,7 +424,7 @@ export async function chatAboutLecture(lecture: Lecture, history: ChatMessage[])
     parts: [{ text: m.text }],
   }));
 
-  const response = await ai.models.generateContent({
+  const response = await generate(ai, {
     model: MODEL,
     contents,
     config: {
@@ -436,7 +444,7 @@ export async function generateAssessment(score: number, total: number): Promise<
   const ai = getClient();
   const percent = Math.round((score / total) * 100);
 
-  const response = await ai.models.generateContent({
+  const response = await generate(ai, {
     model: MODEL,
     contents: [
       {

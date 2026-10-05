@@ -17,6 +17,7 @@ import {
   generateQuestionBatch,
 } from "./_lib/gemini.js";
 import type { DocumentInput } from "./_lib/gemini.js";
+import { isServiceUnavailableError } from "./_lib/retry.js";
 import { buildResultsSheetName, createResultsSheet } from "./_lib/sheets.js";
 import { friendlyErrorMessage, methodNotAllowed, sendError } from "./_lib/http.js";
 import type { UploadStepResponse } from "../shared/types.js";
@@ -143,6 +144,15 @@ async function handleStep(req: VercelRequest, res: VercelResponse) {
     }
   } catch (err) {
     console.error(`upload-step: step "${nextStep}" failed for job ${jobId}:`, err);
+
+    // Gemini quá tải/lỗi máy chủ/mạng (đã tự thử lại trong gemini.ts mà vẫn lỗi): job chưa hỏng gì — kết quả
+    // chỉ được lưu sau khi bước thành công — nên trả 503 để trình duyệt gọi lại ĐÚNG bước này sau ít lâu,
+    // thay vì đánh dấu thất bại cả lượt upload (có thể đã chạy được nhiều phút).
+    if (isServiceUnavailableError(err)) {
+      sendError(res, 503, "Gemini đang quá tải, hệ thống sẽ tự thử lại bước này.");
+      return;
+    }
+
     job.status = "failed";
     job.error = friendlyErrorMessage(err);
     await saveUploadJob(jobId, job);

@@ -38,7 +38,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const r = await ai.models.generateContent({ model, contents: prompt, config });
         return { label, ms: Date.now() - t0, chars: (r.text ?? "").length, usage: r.usageMetadata };
       } catch (err) {
-        return { label, ms: Date.now() - t0, error: err instanceof Error ? err.message.slice(0, 200) : String(err) };
+        return { label, ms: Date.now() - t0, error: err instanceof Error ? err.message.slice(0, 1200) : String(err) };
       }
     };
     const results = await Promise.all([

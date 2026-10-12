@@ -20,6 +20,9 @@ export function friendlyErrorMessage(err: unknown): string {
     if (/KV_REST_API|UPSTASH_REDIS/i.test(err.message)) {
       return "Lỗi cấu hình: chưa thiết lập thông tin lưu trữ (Upstash Redis) trên máy chủ.";
     }
+    if (/PERMISSION_DENIED|API key.*(leaked|not valid|expired|suspended)|\b403\b/i.test(err.message)) {
+      return "Gemini từ chối API key (403 – key bị vô hiệu hóa/bị rò rỉ, hết thanh toán hoặc bị giới hạn). Hãy tạo key mới trong Google AI Studio và cập nhật GEMINI_API_KEY trên Vercel rồi Redeploy.";
+    }
     if (/overloaded|high demand|UNAVAILABLE|\b503\b/i.test(err.message)) {
       return "Gemini đang quá tải tạm thời. Vui lòng thử lại sau ít phút.";
     }

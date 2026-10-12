@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import { verifyAuthHeader } from "./_lib/auth.js";
 import { sendError } from "./_lib/http.js";
 
@@ -27,6 +27,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return;
   }
   const ai = new GoogleGenAI({ apiKey });
+
+  if (req.query.bench) {
+    const model = typeof req.query.model === "string" ? req.query.model : "gemini-3.8-flash";
+    const prompt =
+      "Viết một bài giảng khoảng 500 từ về mạng máy tính (mô hình OSI, TCP/IP, HTTP), chia thành 4 mục có tiêu đề, có ví dụ.";
+    const run = async (label: string, config?: Record<string, unknown>) => {
+      const t0 = Date.now();
+      try {
+        const r = await ai.models.generateContent({ model, contents: prompt, config });
+        return { label, ms: Date.now() - t0, chars: (r.text ?? "").length, usage: r.usageMetadata };
+      } catch (err) {
+        return { label, ms: Date.now() - t0, error: err instanceof Error ? err.message.slice(0, 200) : String(err) };
+      }
+    };
+    const results = await Promise.all([
+      run("default"),
+      run("minimal", { thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL } }),
+      run("low", { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }),
+    ]);
+    res.status(200).json({ model, results });
+    return;
+  }
 
   let listed: string[] | string = [];
   try {

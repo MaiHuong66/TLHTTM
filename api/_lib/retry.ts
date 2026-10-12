@@ -23,6 +23,17 @@ export function isServiceUnavailableError(err: unknown): boolean {
   return UNAVAILABLE_STATUS.has(statusOf(err)) || TRANSIENT_MESSAGE.test(messageOf(err));
 }
 
+/** Vượt hạn mức THEO PHÚT (429): trả về số giây nên chờ (Google ghi "Please retry in 48.6s"), hoặc null nếu
+ * không phải 429 / là hạn mức THEO NGÀY (chờ vài phút cũng không hết nên không đáng thử lại). */
+export function rateLimitRetrySeconds(err: unknown): number | null {
+  if (statusOf(err) !== 429) return null;
+  const msg = messageOf(err);
+  if (/PerDay|per day/i.test(msg)) return null;
+  const m = /retry in ([\d.]+)s/i.exec(msg);
+  const seconds = m ? Math.ceil(Number(m[1])) : 30;
+  return Math.min(Math.max(seconds, 5), 65);
+}
+
 const DEFAULT_DELAYS_MS = [2000, 5000];
 
 /** Gọi `fn`, nếu gặp lỗi tạm thời thì chờ rồi thử lại (mặc định 2 lần: sau 2s và 5s). Các lỗi này thường

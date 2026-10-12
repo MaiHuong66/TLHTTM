@@ -19,7 +19,7 @@ const MAX_STEP_RETRIES = 6;
 async function processStepWithRetry(
   token: string,
   jobId: string,
-  onRetry: (attempt: number) => void
+  onRetry: (attempt: number, waitSec: number, rateLimited: boolean) => void
 ): Promise<UploadStepResponse> {
   let lastError: unknown;
   for (let attempt = 0; attempt <= MAX_STEP_RETRIES; attempt++) {
@@ -27,10 +27,13 @@ async function processStepWithRetry(
       return await processUploadStep(token, jobId);
     } catch (err) {
       lastError = err;
-      const isRetryable = err instanceof ApiError && (err.status === 0 || err.status >= 500);
+      // 429 kèm retryAfterSec = vượt hạn mức theo phút: chờ đúng số giây Google yêu cầu rồi gọi lại bước này.
+      const rateLimited = err instanceof ApiError && err.status === 429 && err.retryAfterSec !== undefined;
+      const isRetryable = rateLimited || (err instanceof ApiError && (err.status === 0 || err.status >= 500));
       if (!isRetryable || attempt === MAX_STEP_RETRIES) throw err;
-      onRetry(attempt + 1);
-      await new Promise((resolve) => setTimeout(resolve, Math.min(2000 * (attempt + 1), 10000)));
+      const waitSec = rateLimited ? (err as ApiError).retryAfterSec! : Math.min(2 * (attempt + 1), 10);
+      onRetry(attempt + 1, waitSec, rateLimited);
+      await new Promise((resolve) => setTimeout(resolve, waitSec * 1000));
     }
   }
   throw lastError;
@@ -105,9 +108,11 @@ export function TeacherUploadPage() {
       while (step.status === "processing") {
         const progress = `(${step.completedSteps}/${step.totalSteps})`;
         setLoadingMessage(`AI đang tạo bài giảng và ngân hàng câu hỏi... ${progress}`);
-        step = await processStepWithRetry(token, jobId, (n) =>
+        step = await processStepWithRetry(token, jobId, (n, waitSec, rateLimited) =>
           setLoadingMessage(
-            `Gemini đang bận hoặc mạng chập chờn, tự thử lại bước này (lần ${n}/${MAX_STEP_RETRIES})... ${progress}`
+            rateLimited
+              ? `Gemini đang giới hạn tần suất (hạn mức theo phút), chờ ${waitSec} giây rồi tự thử lại (lần ${n}/${MAX_STEP_RETRIES})... ${progress}`
+              : `Gemini đang bận hoặc mạng chập chờn, tự thử lại bước này (lần ${n}/${MAX_STEP_RETRIES})... ${progress}`
           )
         );
       }

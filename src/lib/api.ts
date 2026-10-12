@@ -15,9 +15,11 @@ import type {
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  retryAfterSec?: number;
+  constructor(status: number, message: string, retryAfterSec?: number) {
     super(message);
     this.status = status;
+    this.retryAfterSec = retryAfterSec;
   }
 }
 
@@ -33,7 +35,8 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
 
   if (!res.ok) {
     const message = (data as ApiErrorBody | null)?.error || `Đã xảy ra lỗi (mã ${res.status}).`;
-    throw new ApiError(res.status, message);
+    const retryAfterSec = (data as { retryAfterSec?: number } | null)?.retryAfterSec;
+    throw new ApiError(res.status, message, retryAfterSec);
   }
   if (data === null) {
     throw new ApiError(res.status, "Phản hồi từ máy chủ không hợp lệ. Vui lòng thử lại.");

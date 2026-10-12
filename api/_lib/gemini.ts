@@ -3,7 +3,9 @@ import type { ContentListUnion, Part } from "@google/genai";
 import type { AnswerKey, ChatMessage, Difficulty, Lecture, Question } from "../../shared/types.js";
 import { withRetry } from "./retry.js";
 
-const MODEL = "gemini-2.5-flash";
+// Google ngừng cấp gemini-2.5-flash cho tài khoản mới (404 NOT_FOUND) nên mặc định dùng gemini-3.8-flash;
+// có thể đổi bằng biến môi trường GEMINI_MODEL mà không cần sửa code.
+const MODEL = process.env.GEMINI_MODEL?.trim() || "gemini-3.8-flash";
 // Mỗi lô câu hỏi giờ chỉ đọc phần text đã trích xuất riêng cho chương đó (xem extractChapterContent),
 // không phải đọc lại toàn bộ tài liệu gốc — nên có thể để lô lớn hơn mà vẫn an toàn với trần 60s.
 export const MAX_QUESTIONS_PER_BATCH_CALL = 10;

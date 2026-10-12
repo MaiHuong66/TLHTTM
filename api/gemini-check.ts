@@ -40,8 +40,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     listed = `list lỗi: ${err instanceof Error ? err.message.slice(0, 300) : String(err)}`;
   }
 
+  const fromQuery = typeof req.query.models === "string" ? req.query.models.split(",").filter(Boolean) : [];
   const tried = await Promise.all(
-    CANDIDATES.map(async (model) => {
+    (fromQuery.length ? fromQuery : CANDIDATES).map(async (model) => {
       try {
         const r = await ai.models.generateContent({ model, contents: "Trả lời đúng 1 từ: ok" });
         return { model, ok: true, text: (r.text ?? "").slice(0, 40) };

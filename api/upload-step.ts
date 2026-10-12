@@ -143,7 +143,10 @@ async function handleStep(req: VercelRequest, res: VercelResponse) {
       );
     }
   } catch (err) {
-    console.error(`upload-step: step "${nextStep}" failed for job ${jobId}:`, err);
+    console.error(
+      `upload-step: step "${nextStep}" failed for job ${jobId}: ${err instanceof Error ? err.message : String(err)}`,
+      err
+    );
 
     // Gemini quá tải/lỗi máy chủ/mạng (đã tự thử lại trong gemini.ts mà vẫn lỗi): job chưa hỏng gì — kết quả
     // chỉ được lưu sau khi bước thành công — nên trả 503 để trình duyệt gọi lại ĐÚNG bước này sau ít lâu,

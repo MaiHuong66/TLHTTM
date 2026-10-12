@@ -9,6 +9,17 @@ export function methodNotAllowed(res: VercelResponse, allowed: string[]): void {
   sendError(res, 405, "Phương thức không được hỗ trợ.");
 }
 
+// Lỗi từ @google/genai có message là chuỗi JSON {"error":{"message":...}} — lấy phần lý do thật để hiển thị.
+function googleReason(raw: string): string {
+  try {
+    const msg = (JSON.parse(raw) as { error?: { message?: string } }).error?.message;
+    if (msg) return msg.slice(0, 300);
+  } catch {
+    // không phải JSON — dùng nguyên văn
+  }
+  return raw.slice(0, 300);
+}
+
 export function friendlyErrorMessage(err: unknown): string {
   if (err instanceof Error) {
     if (/GEMINI_API_KEY/i.test(err.message)) {
@@ -21,7 +32,7 @@ export function friendlyErrorMessage(err: unknown): string {
       return "Lỗi cấu hình: chưa thiết lập thông tin lưu trữ (Upstash Redis) trên máy chủ.";
     }
     if (/PERMISSION_DENIED|API key.*(leaked|not valid|expired|suspended)|\b403\b/i.test(err.message)) {
-      return "Gemini từ chối API key (403 – key bị vô hiệu hóa/bị rò rỉ, hết thanh toán hoặc bị giới hạn). Hãy tạo key mới trong Google AI Studio và cập nhật GEMINI_API_KEY trên Vercel rồi Redeploy.";
+      return `Gemini từ chối API key (403 – key bị vô hiệu hóa/bị rò rỉ, hết thanh toán hoặc bị giới hạn). Lý do từ Google: ${googleReason(err.message)}`;
     }
     if (/overloaded|high demand|UNAVAILABLE|\b503\b/i.test(err.message)) {
       return "Gemini đang quá tải tạm thời. Vui lòng thử lại sau ít phút.";

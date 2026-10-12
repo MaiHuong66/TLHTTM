@@ -14,6 +14,8 @@ function messageOf(err: unknown): string {
 
 /** Lỗi tạm thời đáng thử lại ngay: Gemini quá tải (503), lỗi máy chủ, mạng chập chờn, hoặc vượt hạn mức theo phút (429). */
 export function isTransientGeminiError(err: unknown): boolean {
+  // Hết hạn mức THEO NGÀY (gói miễn phí): thử lại ngay cũng vô ích.
+  if (statusOf(err) === 429 && /PerDay|per day/i.test(messageOf(err))) return false;
   return RETRYABLE_STATUS.has(statusOf(err)) || TRANSIENT_MESSAGE.test(messageOf(err));
 }
 

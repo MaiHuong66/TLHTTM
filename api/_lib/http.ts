@@ -37,6 +37,9 @@ export function friendlyErrorMessage(err: unknown): string {
     if (/overloaded|high demand|UNAVAILABLE|\b503\b/i.test(err.message)) {
       return "Gemini đang quá tải tạm thời. Vui lòng thử lại sau ít phút.";
     }
+    if (/PerDay|per day/i.test(err.message)) {
+      return "Đã hết hạn mức gọi Gemini trong NGÀY (gói miễn phí chỉ cho ~20 lượt/model/ngày). Hãy bật thanh toán (billing) cho project Gemini hoặc đợi sang ngày mới (hạn mức đặt lại khoảng 14:00 giờ Việt Nam).";
+    }
     if (/quota|rate limit|429/i.test(err.message)) {
       return "Gemini API đang bị giới hạn tần suất (rate limit). Vui lòng thử lại sau ít phút.";
     }

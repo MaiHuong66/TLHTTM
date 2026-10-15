@@ -6,7 +6,7 @@ Hệ thống học tập thông minh dùng Gemini API: giảng viên upload tài
 
 - React 19 + TypeScript + Vite, Tailwind CSS v4
 - Vercel Serverless Functions (thư mục `api/`) — nơi duy nhất gọi Gemini API và các API khác, API key không bao giờ lộ ra frontend
-- Gemini API (`@google/genai`, model mặc định `gemini-3.8-flash`, đổi được bằng biến môi trường `GEMINI_MODEL`) — đọc tài liệu, tạo bài giảng, sinh câu hỏi, chatbot, chấm điểm/nhận xét
+- Gemini API (`@google/genai`, model mặc định `gemini-3.5-flash`, đổi được bằng biến môi trường `GEMINI_MODEL`) — đọc tài liệu, tạo bài giảng, sinh câu hỏi, chatbot, chấm điểm/nhận xét
 - Upstash Redis (REST) — lưu **Bài giảng** + **Ngân hàng câu hỏi** (dữ liệu đọc nhiều bởi mọi sinh viên)
 - Google Sheets API (`googleapis`) — lưu bảng **Kết quả học tập** (giảng viên xem/tìm kiếm/tải Excel)
 

@@ -1,11 +1,11 @@
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI, ThinkingLevel, Type } from "@google/genai";
 import type { ContentListUnion, Part } from "@google/genai";
 import type { AnswerKey, ChatMessage, Difficulty, Lecture, Question } from "../../shared/types.js";
 import { withRetry } from "./retry.js";
 
-// Google ngừng cấp gemini-2.5-flash cho tài khoản mới (404 NOT_FOUND) nên mặc định dùng gemini-3.8-flash;
-// có thể đổi bằng biến môi trường GEMINI_MODEL mà không cần sửa code.
-const MODEL = process.env.GEMINI_MODEL?.trim() || "gemini-3.8-flash";
+// Google ngừng cấp gemini-2.5-flash cho tài khoản mới (404 NOT_FOUND). gemini-3.5-flash đã được kiểm tra chạy ổn định
+// (gemini-3.8-flash hay bị 503 quá tải); có thể đổi bằng biến môi trường GEMINI_MODEL mà không cần sửa code.
+const MODEL = process.env.GEMINI_MODEL?.trim() || "gemini-3.5-flash";
 // Mỗi lô câu hỏi giờ chỉ đọc phần text đã trích xuất riêng cho chương đó (xem extractChapterContent),
 // không phải đọc lại toàn bộ tài liệu gốc — nên có thể để lô lớn hơn mà vẫn an toàn với trần 60s.
 export const MAX_QUESTIONS_PER_BATCH_CALL = 10;
@@ -14,7 +14,10 @@ let client: GoogleGenAI | null = null;
 
 /** generateContent có tự thử lại khi Gemini quá tải/lỗi tạm thời (503, 429 theo phút, lỗi mạng...). */
 function generate(ai: GoogleGenAI, params: Parameters<GoogleGenAI["models"]["generateContent"]>[0]) {
-  return withRetry(() => ai.models.generateContent(params));
+  // Thinking tối thiểu: các tác vụ ở đây (đọc tài liệu, sinh JSON) không cần suy luận sâu, và giảm gần một nửa
+  // thời gian chờ — quan trọng vì mỗi lần gọi phải xong trong 60s của Vercel.
+  const withThinking = { ...params, config: { thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL }, ...params.config } };
+  return withRetry(() => ai.models.generateContent(withThinking));
 }
 
 function getClient(): GoogleGenAI {

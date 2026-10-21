@@ -2,6 +2,8 @@ import { GoogleGenAI, ThinkingLevel, Type } from "@google/genai";
 import type { ContentListUnion, Part } from "@google/genai";
 import type { AnswerKey, ChatMessage, Difficulty, Lecture, Question } from "../../shared/types.js";
 import { withRetry } from "./retry.js";
+import { claudeGenerate, claudeUploadFiles, toJsonSchema } from "./claude.js";
+import type { ClaudeMessage, ClaudePart } from "./claude.js";
 
 // Google ngừng cấp gemini-2.5-flash cho tài khoản mới (404 NOT_FOUND). gemini-3.5-flash đã được kiểm tra chạy ổn định
 // (gemini-3.8-flash hay bị 503 quá tải); có thể đổi bằng biến môi trường GEMINI_MODEL mà không cần sửa code.
@@ -18,6 +20,107 @@ function generate(ai: GoogleGenAI, params: Parameters<GoogleGenAI["models"]["gen
   // thời gian chờ — quan trọng vì mỗi lần gọi phải xong trong 60s của Vercel.
   const withThinking = { ...params, config: { thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL }, ...params.config } };
   return withRetry(() => ai.models.generateContent(withThinking));
+}
+
+/** Nhà cung cấp AI: AI_PROVIDER=claude|gemini; nếu không đặt thì dùng Claude khi có ANTHROPIC_API_KEY, ngược lại Gemini. */
+export function usingClaude(): boolean {
+  const provider = process.env.AI_PROVIDER?.trim().toLowerCase();
+  if (provider === "claude") return true;
+  if (provider === "gemini") return false;
+  return Boolean(process.env.ANTHROPIC_API_KEY);
+}
+
+interface LlmCall {
+  /** Câu lệnh chính (kèm tài liệu nếu có `doc`). */
+  instruction?: string;
+  doc?: DocumentInput;
+  system?: string;
+  /** Lịch sử hội thoại (dùng cho chatbot) thay cho `instruction`. */
+  history?: ChatMessage[];
+  /** Schema kiểu Gemini (Type.OBJECT/ARRAY...) — nếu có, trả về JSON đúng cấu trúc trong `json`. */
+  schema?: unknown;
+  maxOutputTokens?: number;
+}
+
+interface LlmResult {
+  text: string;
+  json: unknown;
+  truncated: boolean;
+}
+
+function buildClaudeDocParts(doc: DocumentInput): ClaudePart[] {
+  const parts: ClaudePart[] = [];
+  if (doc.pastedText.trim()) {
+    parts.push({ text: `--- Nội dung do giảng viên dán trực tiếp ---\n${doc.pastedText.trim()}` });
+  }
+  for (const f of doc.extractedTexts) {
+    parts.push({ text: `--- Nội dung trích xuất từ file "${f.name}" ---\n${f.text}` });
+  }
+  for (const f of doc.uploadedFiles) {
+    parts.push({ file: f });
+  }
+  // Điểm cache nằm sau tài liệu: nhiều bước liên tiếp dùng chung đúng phần này nên được đọc từ cache.
+  if (parts.length > 0) parts.push({ cacheBreakpoint: true });
+  return parts;
+}
+
+/** Gọi AI (Claude hoặc Gemini tùy cấu hình) và trả về kết quả theo 1 dạng chung. */
+async function llm(call: LlmCall): Promise<LlmResult> {
+  if (usingClaude()) {
+    const messages: ClaudeMessage[] = [];
+    if (call.history) {
+      // Claude yêu cầu các lượt xen kẽ user/assistant và bắt đầu bằng user — gộp các lượt liên tiếp cùng vai.
+      for (const m of call.history) {
+        const role = m.role === "model" ? "assistant" : "user";
+        const last = messages[messages.length - 1];
+        if (last && last.role === role) last.parts.push({ text: `\n${m.text}` });
+        else messages.push({ role, parts: [{ text: m.text }] });
+      }
+      while (messages.length > 0 && messages[0].role !== "user") messages.shift();
+    } else {
+      messages.push({
+        role: "user",
+        parts: [...(call.doc ? buildClaudeDocParts(call.doc) : []), { text: call.instruction ?? "" }],
+      });
+    }
+    const result = await claudeGenerate({
+      system: call.system,
+      messages,
+      schema: call.schema ? toJsonSchema(call.schema) : undefined,
+      maxTokens: call.maxOutputTokens ?? 8192,
+    });
+    if (call.schema && (result.truncated || result.json === undefined)) {
+      throw new Error("AI trả về kết quả bị cắt giữa chừng hoặc không đúng cấu trúc. Vui lòng thử lại.");
+    }
+    return result;
+  }
+
+  const ai = getClient();
+  const contents: ContentListUnion = call.history
+    ? call.history.map((m) => ({ role: m.role, parts: [{ text: m.text }] }))
+    : [
+        {
+          role: "user",
+          parts: [{ text: call.instruction ?? "" }, ...(call.doc ? buildDocumentParts(call.doc) : [])],
+        },
+      ];
+  const response = await generate(ai, {
+    model: MODEL,
+    contents,
+    config: {
+      ...(call.system ? { systemInstruction: call.system } : {}),
+      ...(call.schema
+        ? { responseMimeType: "application/json", responseSchema: call.schema as never }
+        : call.maxOutputTokens
+          ? { maxOutputTokens: call.maxOutputTokens }
+          : {}),
+    },
+  });
+  return {
+    text: response.text?.trim() ?? "",
+    json: call.schema ? JSON.parse(extractJsonText(response.text)) : undefined,
+    truncated: response.candidates?.[0]?.finishReason === "MAX_TOKENS",
+  };
 }
 
 function getClient(): GoogleGenAI {
@@ -51,10 +154,12 @@ export interface DocumentInput {
  * (fileUri) thay vì mỗi lệnh đều gửi lại toàn bộ base64 — tránh crash do quá tải bộ nhớ
  * khi 5 request chạy song song.
  */
-export async function uploadFilesToGemini(
+export async function uploadFilesToAi(
   files: { name: string; mimeType: string; base64: string }[]
 ): Promise<UploadedFileRef[]> {
   if (files.length === 0) return [];
+  // Với Claude, `uri` lưu file_id của Claude Files API.
+  if (usingClaude()) return claudeUploadFiles(files);
   const ai = getClient();
 
   return Promise.all(
@@ -148,9 +253,6 @@ export async function extractChapterChunk(
   totalChunks: number,
   previousText: string
 ): Promise<string> {
-  const ai = getClient();
-  const parts = buildDocumentParts(doc);
-
   const chapterLabel =
     numChapters > 1
       ? `chương/phần thứ ${chapter} trong tổng số ${numChapters} chương/phần (phần này thường được đánh dấu là ` +
@@ -176,20 +278,15 @@ export async function extractChapterChunk(
     `quan trọng. ${numChapters > 1 ? "TUYỆT ĐỐI KHÔNG lẫn nội dung của các chương/phần khác vào. " : ""}` +
     `Trình bày dưới dạng văn bản thuần, dùng tiêu đề cho từng mục con nếu có để rõ ràng. Trả lời bằng tiếng Việt.`;
 
-  const response = await generate(ai, {
-    model: MODEL,
-    contents: [{ role: "user", parts: [{ text: instruction }, ...parts] }],
-    config: { maxOutputTokens: 16384 },
-  });
+  const result = await llm({ instruction, doc, maxOutputTokens: 16384 });
 
-  const finishReason = response.candidates?.[0]?.finishReason;
-  if (finishReason === "MAX_TOKENS") {
+  if (result.truncated) {
     throw new Error(
       `Một phần nội dung quá dài, không trích xuất được trong 1 lần (chương ${chapter}, lần ${chunkIndex + 1}/${totalChunks}). Vui lòng thử lại.`
     );
   }
 
-  const text = response.text?.trim();
+  const text = result.text;
   if (!text) {
     throw new Error(`Không trích xuất được nội dung (chương ${chapter}, lần ${chunkIndex + 1}/${totalChunks}).`);
   }
@@ -219,38 +316,22 @@ const lectureSchema = {
 };
 
 export async function generateLecture(doc: DocumentInput): Promise<Omit<Lecture, "updatedAt">> {
-  const ai = getClient();
-  const parts = buildDocumentParts(doc);
-
-  const response = await generate(ai, {
-    model: MODEL,
-    contents: [
-      {
-        role: "user",
-        parts: [
-          {
-            text:
+  const result = await llm({
+    doc,
+    schema: lectureSchema,
+    maxOutputTokens: 12000,
+    instruction:
               "Bạn là một giảng viên đại học giàu kinh nghiệm. Đọc toàn bộ tài liệu bên dưới và biên soạn thành " +
               "một bài giảng khoa học, dễ hiểu cho sinh viên. Bài giảng gồm tối đa 6-8 phần (sections) bao quát " +
               "các ý chính của tài liệu, mỗi phần trình bày súc tích (khoảng 120-200 từ nội dung), kèm 1-2 ví dụ " +
               "minh họa cụ thể và lưu ý nếu có. Cuối bài giảng có phần tóm tắt ngắn gọn giúp sinh viên nắm bài. " +
               "Ưu tiên đầy đủ ý quan trọng nhưng diễn đạt cô đọng, không lan man. Chỉ dùng thông tin có trong tài " +
               "liệu, không bịa thêm kiến thức ngoài tài liệu. Trả lời bằng tiếng Việt.",
-          },
-          ...parts,
-        ],
-      },
-    ],
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: lectureSchema,
-    },
   });
 
-  const json = extractJsonText(response.text);
-  const parsed = JSON.parse(json) as Omit<Lecture, "updatedAt">;
-  if (!parsed.title || !Array.isArray(parsed.sections) || parsed.sections.length === 0) {
-    throw new Error("Gemini trả về bài giảng không hợp lệ.");
+  const parsed = result.json as Omit<Lecture, "updatedAt"> | undefined;
+  if (!parsed || !parsed.title || !Array.isArray(parsed.sections) || parsed.sections.length === 0) {
+    throw new Error("AI trả về bài giảng không hợp lệ.");
   }
   return parsed;
 }
@@ -327,9 +408,6 @@ export async function generateQuestionBatch(
   focusHint: string,
   avoidQuestions: string[] = []
 ): Promise<RawQuestion[]> {
-  const ai = getClient();
-  const parts = buildDocumentParts(doc);
-
   const chapterInstruction =
     numChapters > 1
       ? `CHỈ dựa vào nội dung của chương/phần thứ ${chapter} trong tổng số ${numChapters} chương/phần của tài ` +
@@ -345,38 +423,20 @@ export async function generateQuestionBatch(
         avoidQuestions.map((q, i) => `${i + 1}. ${q}`).join("\n")
       : "";
 
-  const contents: ContentListUnion = [
-    {
-      role: "user",
-      parts: [
-        {
-          text:
+  const instruction =
             `Bạn là một chuyên gia ra đề thi trắc nghiệm. Dựa HOÀN TOÀN trên tài liệu bên dưới, hãy soạn đúng ` +
             `${count} câu hỏi trắc nghiệm. ${chapterInstruction}Khi ra đề, hãy ${focusHint}. ` +
             `Mỗi câu hỏi có đúng 4 đáp án A, B, C, D và chỉ 1 đáp án đúng duy nhất. Câu hỏi phải rõ ràng, ` +
             `bám sát nội dung tài liệu, không được trùng lặp ý với nhau. Đảm bảo pha trộn đa dạng cả 3 mức độ ` +
             `khó trong số ${count} câu này: "Cơ bản" (nhớ/hiểu kiến thức trực tiếp), "Trung bình" (vận dụng, ` +
             `giải thích), "Nâng cao" (phân tích, so sánh, suy luận nhiều bước) — gắn đúng nhãn độ khó thực tế cho ` +
-            `từng câu, không gắn đại khái. Trả lời bằng tiếng Việt.${avoidInstruction}`,
-        },
-        ...parts,
-      ],
-    },
-  ];
+            `từng câu, không gắn đại khái. Trả lời bằng tiếng Việt.${avoidInstruction}`;
 
-  const response = await generate(ai, {
-    model: MODEL,
-    contents,
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: questionBatchSchema,
-    },
-  });
+  const result = await llm({ instruction, doc, schema: questionBatchSchema, maxOutputTokens: 8000 });
 
-  const json = extractJsonText(response.text);
-  const parsed = JSON.parse(json) as RawQuestion[];
+  const parsed = result.json as RawQuestion[];
   if (!Array.isArray(parsed)) {
-    throw new Error("Gemini trả về ngân hàng câu hỏi không hợp lệ.");
+    throw new Error("AI trả về ngân hàng câu hỏi không hợp lệ.");
   }
   return parsed;
 }
@@ -411,8 +471,6 @@ export function finalizeQuestions(batches: { chapter: number; items: RawQuestion
 }
 
 export async function chatAboutLecture(lecture: Lecture, history: ChatMessage[]): Promise<string> {
-  const ai = getClient();
-
   const lectureText = [
     `Tiêu đề: ${lecture.title}`,
     ...lecture.sections.map(
@@ -424,52 +482,35 @@ export async function chatAboutLecture(lecture: Lecture, history: ChatMessage[])
     `Tóm tắt: ${lecture.summary}`,
   ].join("\n\n");
 
-  const contents: ContentListUnion = history.map((m) => ({
-    role: m.role,
-    parts: [{ text: m.text }],
-  }));
-
-  const response = await generate(ai, {
-    model: MODEL,
-    contents,
-    config: {
-      systemInstruction:
+  const result = await llm({
+    history,
+    maxOutputTokens: 1500,
+    system:
         "Bạn là trợ lý học tập, CHỈ được trả lời dựa trên nội dung bài giảng sau đây, không được sử dụng " +
         "bất kỳ kiến thức nào bên ngoài tài liệu này. Nếu câu hỏi của sinh viên không thể trả lời được từ " +
         "nội dung bài giảng, hãy trả lời chính xác câu: \"Không tìm thấy nội dung này trong tài liệu\". " +
         "Trả lời ngắn gọn, dễ hiểu, bằng tiếng Việt.\n\n=== BÀI GIẢNG ===\n" +
         lectureText,
-    },
   });
 
-  return response.text?.trim() || "Không tìm thấy nội dung này trong tài liệu";
+  return result.text || "Không tìm thấy nội dung này trong tài liệu";
 }
 
 export async function generateAssessment(score: number, total: number): Promise<string> {
-  const ai = getClient();
   const percent = Math.round((score / total) * 100);
 
-  const response = await generate(ai, {
-    model: MODEL,
-    contents: [
-      {
-        role: "user",
-        parts: [
-          {
-            text:
+  const result = await llm({
+    maxOutputTokens: 600,
+    instruction:
               `Một sinh viên vừa làm bài kiểm tra trắc nghiệm và đạt ${score}/${total} câu đúng (${percent}%). ` +
               `Hãy viết một nhận xét khách quan, công bằng (2-3 câu) về khả năng hiểu bài của sinh viên dựa trên ` +
               `kết quả này. Diễn đạt tự nhiên, đa dạng cách hành văn, tránh lối viết máy móc/khuôn mẫu lặp lại. ` +
               `Nếu điểm cao hãy khen và khuyến khích giữ vững; nếu điểm trung bình hãy chỉ ra cần ôn lại phần nào; ` +
               `nếu điểm thấp hãy nhận xét thẳng thắn nhưng vẫn mang tính xây dựng. Trả lời bằng tiếng Việt, chỉ ` +
               `trả về đoạn nhận xét, không thêm tiêu đề.`,
-          },
-        ],
-      },
-    ],
   });
 
-  return response.text?.trim() || `Bạn đạt ${score}/${total} câu đúng.`;
+  return result.text || `Bạn đạt ${score}/${total} câu đúng.`;
 }
 
 function extractJsonText(text: string | undefined): string {

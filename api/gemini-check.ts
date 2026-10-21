@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import { verifyAuthHeader } from "./_lib/auth.js";
 import { sendError } from "./_lib/http.js";
+import { claudeGenerate, toJsonSchema } from "./_lib/claude.js";
 
 // Endpoint chẩn đoán (chỉ giảng viên): liệt kê model mà API key hiện tại thấy được và thử gọi nhanh
 // từng model ứng viên, để biết model nào dùng được. Không trả về API key.
@@ -21,6 +22,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     sendError(res, 401, "Bạn cần đăng nhập với vai trò giảng viên.");
     return;
   }
+  // ?claude=1: kiểm tra nhanh Claude API (gọi văn bản và gọi có schema JSON) và đo độ trễ.
+  if (req.query.claude) {
+    const run = async (label: string, schema?: Record<string, unknown>) => {
+      const t0 = Date.now();
+      try {
+        const r = await claudeGenerate({
+          messages: [{ role: "user", parts: [{ text: "Trả lời đúng 1 từ: ok. Nếu có công cụ thì gọi với items là mảng 2 chuỗi." }] }],
+          schema,
+          maxTokens: 300,
+        });
+        return { label, ms: Date.now() - t0, text: r.text.slice(0, 60), json: r.json, truncated: r.truncated };
+      } catch (err) {
+        return { label, ms: Date.now() - t0, error: err instanceof Error ? err.message.slice(0, 600) : String(err) };
+      }
+    };
+    const results = [
+      await run("text"),
+      await run("json-array", toJsonSchema({ type: "ARRAY", items: { type: "STRING" } })),
+    ];
+    res.status(200).json({ provider: process.env.AI_PROVIDER ?? null, results });
+    return;
+  }
+
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     sendError(res, 500, "Thiếu GEMINI_API_KEY.");

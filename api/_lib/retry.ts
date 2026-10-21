@@ -1,5 +1,6 @@
-const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
-const UNAVAILABLE_STATUS = new Set([500, 502, 503, 504]);
+// 529 = Claude (Anthropic) quá tải.
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504, 529]);
+const UNAVAILABLE_STATUS = new Set([500, 502, 503, 504, 529]);
 const TRANSIENT_MESSAGE =
   /overloaded|high demand|UNAVAILABLE|fetch failed|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up|network/i;
 
@@ -19,10 +20,16 @@ export function isTransientGeminiError(err: unknown): boolean {
   return RETRYABLE_STATUS.has(statusOf(err)) || TRANSIENT_MESSAGE.test(messageOf(err));
 }
 
+/** Hết thời gian chờ 1 lần gọi AI (client đã tự ngắt trước trần 60s của Vercel): không thử lại ngay trong
+ * cùng lần gọi hàm (sẽ vượt 60s) mà để trình duyệt gọi lại đúng bước đó. */
+const TIMEOUT_MESSAGE = /timed out|timeout/i;
+
 /** Gemini đang không phục vụ được (quá tải/lỗi máy chủ/mạng) — khác với hết hạn mức (429) hay lỗi dữ liệu:
  * job chưa hỏng, chỉ cần gọi lại đúng bước đó sau ít lâu. */
 export function isServiceUnavailableError(err: unknown): boolean {
-  return UNAVAILABLE_STATUS.has(statusOf(err)) || TRANSIENT_MESSAGE.test(messageOf(err));
+  return (
+    UNAVAILABLE_STATUS.has(statusOf(err)) || TRANSIENT_MESSAGE.test(messageOf(err)) || TIMEOUT_MESSAGE.test(messageOf(err))
+  );
 }
 
 /** Vượt hạn mức THEO PHÚT (429): trả về số giây nên chờ (Google ghi "Please retry in 48.6s"), hoặc null nếu
@@ -32,7 +39,10 @@ export function rateLimitRetrySeconds(err: unknown): number | null {
   const msg = messageOf(err);
   if (/PerDay|per day/i.test(msg)) return null;
   const m = /retry in ([\d.]+)s/i.exec(msg);
-  const seconds = m ? Math.ceil(Number(m[1])) : 30;
+  // Claude gửi thời gian chờ trong header retry-after.
+  const headers = (err as { headers?: { get?: (k: string) => string | null } })?.headers;
+  const header = Number(headers?.get?.("retry-after"));
+  const seconds = m ? Math.ceil(Number(m[1])) : Number.isFinite(header) && header > 0 ? Math.ceil(header) : 30;
   return Math.min(Math.max(seconds, 5), 65);
 }
 

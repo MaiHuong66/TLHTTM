@@ -30,6 +30,14 @@ src/
   lib/api.ts            # fetch wrapper gọi các API
 ```
 
+## Chọn nhà cung cấp AI (Claude hoặc Gemini)
+
+App hỗ trợ cả hai, chọn bằng biến môi trường (code ở `api/_lib/gemini.ts`, `api/_lib/claude.ts`):
+
+- `AI_PROVIDER=claude` hoặc `gemini`. Bỏ trống: dùng **Claude nếu có `ANTHROPIC_API_KEY`**, ngược lại dùng Gemini.
+- **Claude**: `ANTHROPIC_API_KEY` (lấy ở https://platform.claude.com/settings/keys), tùy chọn `CLAUDE_MODEL` (mặc định `claude-haiku-5-5`). PDF/ảnh được tải lên Claude Files API đúng 1 lần rồi tham chiếu bằng `file_id`; kết quả JSON (bài giảng, câu hỏi) lấy qua tool bắt buộc; phần tài liệu được đánh dấu prompt-cache để các bước sau đọc rẻ hơn.
+- Đổi nhà cung cấp xong cần **Redeploy** trên Vercel.
+
 ## Thiết lập môi trường (bắt buộc trước khi chạy)
 
 Ứng dụng cần 3 dịch vụ bên ngoài. Không có key nào được hardcode — tất cả đọc từ Environment Variables.

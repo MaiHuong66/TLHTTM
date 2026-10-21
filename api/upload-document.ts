@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { verifyAuthHeader } from "./_lib/auth.js";
 import { saveUploadJob } from "./_lib/kv.js";
 import type { UploadJob } from "./_lib/kv.js";
-import { planExtractionChunksPerChapter, planQuestionBatches, uploadFilesToGemini } from "./_lib/gemini.js";
+import { planExtractionChunksPerChapter, planQuestionBatches, uploadFilesToAi } from "./_lib/gemini.js";
 import type { DocumentInput } from "./_lib/gemini.js";
 import {
   DOCX_MIME_TYPES,
@@ -140,10 +140,10 @@ async function handleStart(req: VercelRequest, res: VercelResponse) {
 
   let uploadedFiles: DocumentInput["uploadedFiles"];
   try {
-    uploadedFiles = await uploadFilesToGemini(inlineFiles);
+    uploadedFiles = await uploadFilesToAi(inlineFiles);
   } catch (err) {
-    console.error("upload-document: uploadFilesToGemini failed:", err);
-    sendError(res, 502, `Lỗi khi tải file lên Gemini: ${friendlyErrorMessage(err)}`);
+    console.error("upload-document: uploadFilesToAi failed:", err);
+    sendError(res, 502, `Lỗi khi tải file lên AI: ${friendlyErrorMessage(err)}`);
     return;
   }
 

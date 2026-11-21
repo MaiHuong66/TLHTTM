@@ -111,7 +111,12 @@ async function handleStep(req: VercelRequest, res: VercelResponse) {
         .filter((i) => Number.isInteger(i) && i < plan.length);
 
       if (pointIndexes.length > 0) {
-        Object.assign(job.questionsByPoint, await generateQuestionsForPoints(doc, plan, pointIndexes));
+        Object.assign(
+          job.questionsByPoint,
+          await generateQuestionsForPoints(doc, plan, pointIndexes, (reason, item) =>
+            console.warn(`upload-step: job ${jobId} bỏ 1 câu (${reason}):`, JSON.stringify(item).slice(0, 500))
+          )
+        );
 
         // Nội dung AI trả về thiếu/không hợp lệ: cho sinh lại 1 lần ở 1 bước bổ sung cuối hàng đợi.
         const missing = pointIndexes.filter((i) => !job.questionsByPoint[i] && !job.retriedPoints.includes(i));

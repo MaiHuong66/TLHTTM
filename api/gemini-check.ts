@@ -54,8 +54,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const planMs = Date.now() - t0;
       const from = Math.min(Number(req.query.from) || 0, Math.max(0, plan.length - 1));
       const batch = plan.slice(from, from + QUESTIONS_PER_BATCH).map((_, i) => from + i);
-      const questions = await generateQuestionsForPoints(doc, plan, batch);
-      res.status(200).json({ planMs, batchMs: Date.now() - t0 - planMs, plan, questions });
+      const rejected: { reason: string; item: unknown }[] = [];
+      const questions = await generateQuestionsForPoints(doc, plan, batch, (reason, item) => rejected.push({ reason, item }));
+      res.status(200).json({ planMs, batchMs: Date.now() - t0 - planMs, batch, plan, questions, rejected });
     } catch (err) {
       res.status(200).json({ ms: Date.now() - t0, error: err instanceof Error ? err.message.slice(0, 800) : String(err) });
     }

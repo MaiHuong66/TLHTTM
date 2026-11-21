@@ -404,7 +404,8 @@ const ANSWER_KEYS: AnswerKey[] = ["A", "B", "C", "D"];
 export async function generateQuestionsForPoints(
   doc: DocumentInput,
   plan: ContentPoint[],
-  pointIndexes: number[]
+  pointIndexes: number[],
+  onReject: (reason: string, item: unknown) => void = () => undefined
 ): Promise<Record<number, RawQuestion>> {
   const assigned = pointIndexes
     .map((idx, i) => `${i + 1}. [${plan[idx].level}] ${plan[idx].topic}`)
@@ -444,12 +445,25 @@ export async function generateQuestionsForPoints(
   const byPoint: Record<number, RawQuestion> = {};
   for (const q of parsed) {
     const pointIdx = pointIndexes[Number(q?.contentNumber) - 1];
-    if (pointIdx === undefined || byPoint[pointIdx]) continue;
-    const options = [q.optionA, q.optionB, q.optionC, q.optionD];
-    if (typeof q.question !== "string" || !q.question.trim()) continue;
-    if (options.some((o) => typeof o !== "string" || !o.trim())) continue;
-    if (new Set(options.map(normalizeText)).size !== 4) continue;
-    if (!ANSWER_KEYS.includes(q.correctAnswer)) continue;
+    const options = [q?.optionA, q?.optionB, q?.optionC, q?.optionD];
+    const reason =
+      pointIdx === undefined
+        ? "contentNumber không thuộc danh sách được giao"
+        : byPoint[pointIdx]
+          ? "trùng contentNumber"
+          : typeof q.question !== "string" || !q.question.trim()
+            ? "thiếu câu hỏi"
+            : options.some((o) => typeof o !== "string" || !o.trim())
+              ? "thiếu phương án"
+              : new Set(options.map((o) => normalizeText(o))).size !== 4
+                ? "có 2 phương án giống nhau"
+                : !ANSWER_KEYS.includes(q.correctAnswer)
+                  ? "đáp án đúng không phải A/B/C/D"
+                  : null;
+    if (reason || pointIdx === undefined) {
+      onReject(reason ?? "không hợp lệ", q);
+      continue;
+    }
     byPoint[pointIdx] = {
       question: q.question.trim(),
       optionA: q.optionA.trim(),

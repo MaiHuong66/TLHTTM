@@ -11,9 +11,9 @@ import {
 import { appendResult } from "./_lib/sheets.js";
 import { generateAssessment } from "./_lib/gemini.js";
 import { normalizeStudentKey } from "./_lib/identity.js";
-import { ANSWER_KEYS, displayedOptions, toDisplayedKey, toOriginalKey } from "./_lib/optionOrder.js";
+import { gradeAttempt } from "./_lib/optionOrder.js";
 import { friendlyErrorMessage, methodNotAllowed, sendError } from "./_lib/http.js";
-import type { AnswerKey, QuizReviewItem, SubmitTestResponse } from "../shared/types.js";
+import type { AnswerKey, SubmitTestResponse } from "../shared/types.js";
 
 export const config = { maxDuration: 30 };
 
@@ -89,28 +89,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     const bankById = new Map(bank.map((q) => [q.id, q]));
 
-    let score = 0;
-    const review: QuizReviewItem[] = [];
-
     // Chấm theo danh sách câu hỏi server đã giao cho lượt này, không dựa vào danh sách client gửi lên.
-    for (const id of attempt.questionIds) {
-      const question = bankById.get(id);
-      if (!question) continue;
-      // Sinh viên chọn theo vị trí đáp án HIỂN THỊ (đã đảo); đổi về đáp án gốc để chấm.
-      const order = attempt.optionOrders?.[id];
-      const raw = answers[id];
-      const chosen = raw && ANSWER_KEYS.includes(raw) ? raw : null;
-      const isCorrect = chosen !== null && toOriginalKey(chosen, order) === question.correctAnswer;
-      if (isCorrect) score++;
-      review.push({
-        id: question.id,
-        question: question.question,
-        options: displayedOptions(question, order),
-        correctAnswer: toDisplayedKey(question.correctAnswer, order),
-        chosen,
-        isCorrect,
-      });
-    }
+    const { score, review } = gradeAttempt(attempt.questionIds, bankById, attempt.optionOrders, answers);
 
     const total = review.length;
     if (total === 0) {

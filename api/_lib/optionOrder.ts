@@ -1,4 +1,4 @@
-import type { AnswerKey, Question } from "../../shared/types.js";
+import type { AnswerKey, Question, QuizReviewItem } from "../../shared/types.js";
 
 export const ANSWER_KEYS: AnswerKey[] = ["A", "B", "C", "D"];
 
@@ -37,4 +37,34 @@ export function toOriginalKey(displayed: AnswerKey, order: AnswerKey[] | undefin
 export function toDisplayedKey(original: AnswerKey, order: AnswerKey[] | undefined): AnswerKey {
   if (!isValidOrder(order)) return original;
   return ANSWER_KEYS[order.indexOf(original)];
+}
+
+/** Chấm 1 lượt làm theo đúng danh sách câu server đã giao. `answers` là đáp án sinh viên chọn theo vị trí HIỂN THỊ
+ * (đã đảo); phần xem lại trả về cũng theo thứ tự hiển thị đó để khớp với những gì sinh viên đã thấy. */
+export function gradeAttempt(
+  questionIds: string[],
+  bankById: Map<string, Question>,
+  optionOrders: Record<string, AnswerKey[]> | undefined,
+  answers: Record<string, unknown>
+): { score: number; review: QuizReviewItem[] } {
+  let score = 0;
+  const review: QuizReviewItem[] = [];
+  for (const id of questionIds) {
+    const question = bankById.get(id);
+    if (!question) continue;
+    const order = optionOrders?.[id];
+    const raw = answers[id];
+    const chosen = ANSWER_KEYS.includes(raw as AnswerKey) ? (raw as AnswerKey) : null;
+    const isCorrect = chosen !== null && toOriginalKey(chosen, order) === question.correctAnswer;
+    if (isCorrect) score++;
+    review.push({
+      id: question.id,
+      question: question.question,
+      options: displayedOptions(question, order),
+      correctAnswer: toDisplayedKey(question.correctAnswer, order),
+      chosen,
+      isCorrect,
+    });
+  }
+  return { score, review };
 }

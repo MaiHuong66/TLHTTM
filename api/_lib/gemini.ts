@@ -401,22 +401,33 @@ export async function planMoreContentPoints(
   );
 }
 
-const questionBatchSchema = {
-  type: Type.ARRAY,
-  items: {
-    type: Type.OBJECT,
-    properties: {
-      contentNumber: { type: Type.INTEGER, description: "Số thứ tự của nội dung được giao mà câu hỏi này kiểm tra" },
-      question: { type: Type.STRING },
-      optionA: { type: Type.STRING },
-      optionB: { type: Type.STRING },
-      optionC: { type: Type.STRING },
-      optionD: { type: Type.STRING },
-      correctAnswer: { type: Type.STRING, enum: ["A", "B", "C", "D"] },
-    },
-    required: ["contentNumber", "question", "optionA", "optionB", "optionC", "optionD", "correctAnswer"],
+const questionSchema = {
+  type: Type.OBJECT,
+  properties: {
+    question: { type: Type.STRING },
+    optionA: { type: Type.STRING },
+    optionB: { type: Type.STRING },
+    optionC: { type: Type.STRING },
+    optionD: { type: Type.STRING },
+    correctAnswer: { type: Type.STRING, enum: ["A", "B", "C", "D"] },
   },
+  required: ["question", "optionA", "optionB", "optionC", "optionD", "correctAnswer"],
 };
+
+/** Mỗi câu của lô có 1 ô riêng bắt buộc ("cau_1", "cau_2"...) thay vì 1 mảng: với chế độ strict, AI buộc phải trả đủ
+ * từng câu và đủ từng trường (với mảng, AI có lúc trả ít câu hơn số được giao). */
+function slotName(i: number): string {
+  return `cau_${i + 1}`;
+}
+
+function questionBatchSchema(count: number) {
+  const slots = Array.from({ length: count }, (_, i) => slotName(i));
+  return {
+    type: Type.OBJECT,
+    properties: Object.fromEntries(slots.map((name) => [name, questionSchema])),
+    required: slots,
+  };
+}
 
 export interface RawQuestion {
   question: string;
@@ -449,8 +460,8 @@ export async function generateQuestionsForPoints(
 
   const instruction =
     `Bạn là chuyên gia ra đề kiểm tra trắc nghiệm. Dựa HOÀN TOÀN vào tài liệu bên dưới, soạn ĐÚNG 1 câu hỏi ` +
-    `trắc nghiệm cho MỖI nội dung trong danh sách được giao (tổng ${pointIndexes.length} câu), ghi contentNumber là ` +
-    `số thứ tự của nội dung đó.\n\n` +
+    `trắc nghiệm cho MỖI nội dung trong danh sách được giao (tổng ${pointIndexes.length} câu). Câu cho nội dung số k ` +
+    `ghi vào ô cau_k (nội dung 1 → cau_1, nội dung 2 → cau_2...).\n\n` +
     `NỘI DUNG ĐƯỢC GIAO (kèm mức độ bắt buộc):\n${assigned}\n\n` +
     `Yêu cầu cho từng câu:\n` +
     `- Chỉ kiểm tra đúng nội dung được giao cho câu đó, đúng mức độ ghi trong ngoặc vuông. ${LEVEL_GUIDE}\n` +
@@ -467,33 +478,35 @@ export async function generateQuestionsForPoints(
       ? `\n\nCÁC NỘI DUNG SAU ĐÃ/SẼ ĐƯỢC HỎI Ở CÂU KHÁC — không được hỏi về chúng:\n${others}`
       : "");
 
-  const result = await llm({ instruction, doc, schema: questionBatchSchema, maxOutputTokens: 8000 });
-  const parsed = result.json as (Omit<RawQuestion, "difficulty"> & { contentNumber: number })[] | undefined;
-  if (!Array.isArray(parsed)) {
+  const result = await llm({
+    instruction,
+    doc,
+    schema: questionBatchSchema(pointIndexes.length),
+    maxOutputTokens: 8000,
+  });
+  const parsed = result.json as Record<string, Omit<RawQuestion, "difficulty"> | undefined> | undefined;
+  if (!parsed || typeof parsed !== "object") {
     throw new Error("AI trả về câu hỏi không hợp lệ.");
   }
 
   const byPoint: Record<number, RawQuestion> = {};
-  for (const q of parsed) {
-    const pointIdx = pointIndexes[Number(q?.contentNumber) - 1];
+  pointIndexes.forEach((pointIdx, i) => {
+    const q = parsed[slotName(i)];
     const options = [q?.optionA, q?.optionB, q?.optionC, q?.optionD];
-    const reason =
-      pointIdx === undefined
-        ? "contentNumber không thuộc danh sách được giao"
-        : byPoint[pointIdx]
-          ? "trùng contentNumber"
-          : typeof q.question !== "string" || !q.question.trim()
-            ? "thiếu câu hỏi"
-            : options.some((o) => typeof o !== "string" || !o.trim())
-              ? "thiếu phương án"
-              : new Set(options.map((o) => normalizeText(o))).size !== 4
-                ? "có 2 phương án giống nhau"
-                : !ANSWER_KEYS.includes(q.correctAnswer)
-                  ? "đáp án đúng không phải A/B/C/D"
-                  : null;
-    if (reason || pointIdx === undefined) {
-      onReject(reason ?? "không hợp lệ", q);
-      continue;
+    const reason = !q
+      ? "thiếu câu"
+      : typeof q.question !== "string" || !q.question.trim()
+        ? "thiếu câu hỏi"
+        : options.some((o) => typeof o !== "string" || !o.trim())
+          ? "thiếu phương án"
+          : new Set(options.map((o) => normalizeText(o as string))).size !== 4
+            ? "có 2 phương án giống nhau"
+            : !ANSWER_KEYS.includes(q.correctAnswer)
+              ? "đáp án đúng không phải A/B/C/D"
+              : null;
+    if (reason || !q) {
+      onReject(reason ?? "không hợp lệ", q ?? { slot: slotName(i) });
+      return;
     }
     byPoint[pointIdx] = {
       question: q.question.trim(),
@@ -504,7 +517,7 @@ export async function generateQuestionsForPoints(
       correctAnswer: q.correctAnswer,
       difficulty: plan[pointIdx].level,
     };
-  }
+  });
   return byPoint;
 }
 

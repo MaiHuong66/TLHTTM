@@ -95,7 +95,7 @@ export interface UploadJob {
   totalQuestions: number;
   allowRetake: boolean;
   timeLimitMinutes: number;
-  /** Bước còn lại: "lecture" | "plan" | "q:{vị trí nội dung, cách nhau bằng dấu phẩy}". */
+  /** Bước còn lại: "lecture" | "plan" | "plan-more:{lần}" | "q:{vị trí nội dung, cách nhau bằng dấu phẩy}". */
   steps: string[];
   totalSteps: number;
   lecture?: Omit<Lecture, "updatedAt">;
@@ -103,7 +103,7 @@ export interface UploadJob {
   plan?: ContentPoint[];
   /** Câu hỏi đã sinh, key = vị trí nội dung trong `plan`. */
   questionsByPoint: Record<number, RawQuestion>;
-  /** Vị trí nội dung đã được cho sinh lại 1 lần vì lần đầu AI trả về thiếu/không hợp lệ. */
+  /** Vị trí nội dung đã được cho sinh lại (mỗi lần sinh lại ghi thêm 1 phần tử) vì AI trả về thiếu/không hợp lệ. */
   retriedPoints: number[];
   error?: string;
 }

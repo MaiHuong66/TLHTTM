@@ -370,6 +370,37 @@ export async function planContentPoints(doc: DocumentInput, total: number): Prom
   return points;
 }
 
+/** Bổ sung khi danh sách nội dung còn thiếu so với `total`: xin thêm các nội dung KHÁC những nội dung đã có, đúng
+ * số còn thiếu ở từng mức độ. */
+export async function planMoreContentPoints(
+  doc: DocumentInput,
+  existing: ContentPoint[],
+  total: number
+): Promise<ContentPoint[]> {
+  const targets = levelTargets(total);
+  const missing = COGNITIVE_LEVELS.map((l) => ({
+    level: l,
+    count: Math.max(0, targets.get(l)! - existing.filter((p) => p.level === l).length),
+  })).filter((m) => m.count > 0);
+  const need = missing.reduce((sum, m) => sum + m.count, 0);
+  if (need === 0) return existing;
+
+  const instruction =
+    `Bạn là chuyên gia ra đề kiểm tra trắc nghiệm. Từ tài liệu bên dưới đã chọn được các đơn vị nội dung kiến thức ` +
+    `sau, mỗi đơn vị sẽ được hỏi đúng 1 câu:\n${existing.map((p, i) => `${i + 1}. ${p.topic}`).join("\n")}\n\n` +
+    `Hãy bổ sung ĐÚNG ${need} đơn vị nội dung MỚI, gồm: ${missing.map((m) => `${m.count} "${m.level}"`).join(", ")}. ` +
+    `Mỗi đơn vị mới là một ý kiến thức cụ thể có trong tài liệu, KHÔNG trùng, không bao hàm và không phải cách diễn ` +
+    `đạt khác của bất kỳ đơn vị nào ở trên hay của nhau. Có thể khai thác ví dụ, chi tiết, ứng dụng, lưu ý chưa được ` +
+    `chọn. ${LEVEL_GUIDE} Viết bằng tiếng Việt.`;
+
+  const result = await llm({ instruction, doc, schema: contentPlanSchema, maxOutputTokens: 3000 });
+  const extra = Array.isArray(result.json) ? (result.json as ContentPoint[]) : [];
+  return balanceContentPoints(
+    [...existing, ...extra.filter((p) => p && typeof p.topic === "string")],
+    total
+  );
+}
+
 const questionBatchSchema = {
   type: Type.ARRAY,
   items: {

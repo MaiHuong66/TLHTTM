@@ -92,20 +92,45 @@ function toBlocks(parts: ClaudePart[]): BetaContentBlockParam[] {
   return blocks;
 }
 
-/** Chuyển schema kiểu Gemini (type viết hoa: OBJECT/STRING/ARRAY...) sang JSON Schema chuẩn (viết thường). */
+/** Chuyển schema kiểu Gemini (type viết hoa: OBJECT/STRING/ARRAY...) sang JSON Schema chuẩn (viết thường). Mọi object
+ * được thêm `additionalProperties: false` — bắt buộc với chế độ strict (Claude phải trả đúng cấu trúc). */
 export function toJsonSchema(schema: unknown): Record<string, unknown> {
-  const convert = (node: unknown): unknown => {
-    if (Array.isArray(node)) return node.map(convert);
+  const convert = (node: unknown, isSchema: boolean): unknown => {
+    if (Array.isArray(node)) return node.map((n) => convert(n, false));
     if (node && typeof node === "object") {
       const out: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(node)) {
-        out[k] = k === "type" && typeof v === "string" ? v.toLowerCase() : convert(v);
+        if (k === "type" && typeof v === "string") out[k] = v.toLowerCase();
+        else if (k === "properties" && v && typeof v === "object") {
+          out[k] = Object.fromEntries(Object.entries(v).map(([name, sub]) => [name, convert(sub, true)]));
+        } else if (k === "items") out[k] = convert(v, true);
+        else out[k] = convert(v, false);
       }
+      if (isSchema && out.type === "object" && !("additionalProperties" in out)) out.additionalProperties = false;
       return out;
     }
     return node;
   };
-  return convert(schema) as Record<string, unknown>;
+  return convert(schema, true) as Record<string, unknown>;
+}
+
+/** Phòng khi AI viết lệch tên trường (vd " correctAnswer" thừa dấu cách, khác hoa thường): đưa về đúng tên trong
+ * schema để không bị bỏ mất dữ liệu. */
+export function normalizeToSchema(value: unknown, schema: unknown): unknown {
+  const s = schema as { type?: string; properties?: Record<string, unknown>; items?: unknown } | undefined;
+  if (Array.isArray(value)) return value.map((v) => normalizeToSchema(v, s?.items));
+  if (value && typeof value === "object" && s?.properties) {
+    const byLooseName = new Map(Object.keys(s.properties).map((name) => [name.toLowerCase(), name]));
+    const out: Record<string, unknown> = {};
+    for (const [rawKey, v] of Object.entries(value)) {
+      const name = byLooseName.get(rawKey.replace(/\s+/g, "").toLowerCase()) ?? rawKey;
+      if (name in out && !(rawKey in (s.properties ?? {}))) continue; // giữ bản đúng tên nếu có cả hai
+      out[name] = normalizeToSchema(v, s.properties[name]);
+    }
+    return out;
+  }
+  if (typeof value === "string" && (s?.type === "string" || s?.type === undefined)) return value;
+  return value;
 }
 
 export async function claudeGenerate(req: ClaudeRequest): Promise<ClaudeResult> {
@@ -115,7 +140,7 @@ export async function claudeGenerate(req: ClaudeRequest): Promise<ClaudeResult> 
   const wrapped = req.schema?.type === "array";
   const inputSchema = req.schema
     ? wrapped
-      ? { type: "object", properties: { items: req.schema }, required: ["items"] }
+      ? { type: "object", properties: { items: req.schema }, required: ["items"], additionalProperties: false }
       : req.schema
     : undefined;
 
@@ -133,6 +158,7 @@ export async function claudeGenerate(req: ClaudeRequest): Promise<ClaudeResult> 
                 name: "submit_result",
                 description: "Trả về kết quả cuối cùng đúng cấu trúc yêu cầu.",
                 input_schema: inputSchema as { type: "object" },
+                strict: true,
               },
             ],
             tool_choice: { type: "tool" as const, name: "submit_result" },
@@ -151,7 +177,7 @@ export async function claudeGenerate(req: ClaudeRequest): Promise<ClaudeResult> 
   let json: unknown = undefined;
   const toolBlock = response.content.find((b) => b.type === "tool_use") as { input?: unknown } | undefined;
   if (toolBlock) {
-    const input = toolBlock.input as Record<string, unknown> | undefined;
+    const input = normalizeToSchema(toolBlock.input, inputSchema) as Record<string, unknown> | undefined;
     json = wrapped ? input?.items : input;
   }
 

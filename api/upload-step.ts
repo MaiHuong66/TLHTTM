@@ -14,7 +14,13 @@ import {
   generateLecture,
   generateQuestionsForPoints,
   planContentPoints,
+  planMoreContentPoints,
 } from "./_lib/gemini.js";
+
+/** Số lần tối đa cho sinh lại câu hỏi của 1 nội dung khi AI trả về thiếu/không hợp lệ. */
+const MAX_POINT_RETRIES = 3;
+/** Số lần tối đa xin bổ sung nội dung khi danh sách nội dung chưa đủ số câu yêu cầu. */
+const MAX_PLAN_TOP_UPS = 2;
 import type { DocumentInput } from "./_lib/gemini.js";
 import { isServiceUnavailableError, rateLimitRetrySeconds } from "./_lib/retry.js";
 import { buildResultsSheetName, createResultsSheet } from "./_lib/sheets.js";
@@ -98,8 +104,19 @@ async function handleStep(req: VercelRequest, res: VercelResponse) {
   try {
     if (nextStep === "lecture") {
       job.lecture = await generateLecture(doc);
-    } else if (nextStep === "plan") {
-      job.plan = await planContentPoints(doc, job.totalQuestions);
+    } else if (nextStep === "plan" || nextStep.startsWith("plan-more")) {
+      job.plan =
+        nextStep === "plan"
+          ? await planContentPoints(doc, job.totalQuestions)
+          : await planMoreContentPoints(doc, job.plan ?? [], job.totalQuestions);
+
+      // Tài liệu đôi khi cho ít nội dung hơn yêu cầu ở lần đầu: xin bổ sung ngay ở bước kế tiếp (trước các bước
+      // soạn câu hỏi), các bước "q:*" đã lên lịch sẵn cho đủ vị trí nên sẽ tự soạn cả nội dung bổ sung.
+      const topUps = nextStep === "plan" ? 0 : Number(nextStep.split(":")[1]) || 1;
+      if (job.plan.length < job.totalQuestions && topUps < MAX_PLAN_TOP_UPS) {
+        job.steps.splice(1, 0, `plan-more:${topUps + 1}`);
+        job.totalSteps++;
+      }
     } else {
       // Step key dạng "q:{vị trí nội dung},{vị trí nội dung},..." (vị trí trong job.plan). Tài liệu ngắn có thể có ít
       // nội dung hơn số câu yêu cầu — khi đó bỏ qua các vị trí không tồn tại.
@@ -118,8 +135,10 @@ async function handleStep(req: VercelRequest, res: VercelResponse) {
           )
         );
 
-        // Nội dung AI trả về thiếu/không hợp lệ: cho sinh lại 1 lần ở 1 bước bổ sung cuối hàng đợi.
-        const missing = pointIndexes.filter((i) => !job.questionsByPoint[i] && !job.retriedPoints.includes(i));
+        // Nội dung AI trả về thiếu/không hợp lệ: cho sinh lại (tối đa MAX_POINT_RETRIES lần) ở bước bổ sung cuối hàng đợi.
+        const missing = pointIndexes.filter(
+          (i) => !job.questionsByPoint[i] && job.retriedPoints.filter((r) => r === i).length < MAX_POINT_RETRIES
+        );
         if (missing.length > 0) {
           job.retriedPoints.push(...missing);
           job.steps.push(`q:${missing.join(",")}`);

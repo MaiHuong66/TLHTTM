@@ -472,7 +472,8 @@ export async function generateQuestionsForPoints(
     `bài, cùng dạng và độ dài tương đương phương án đúng. Phương án đúng KHÔNG được là phương án dài nhất/chi tiết ` +
     `nhất một cách dễ nhận ra, và không chép nguyên văn câu trong tài liệu trong khi các phương án sai lại diễn đạt khác.\n` +
     `- Thứ tự các phương án sẽ bị XÁO TRỘN khi thi, nên TUYỆT ĐỐI KHÔNG dùng phương án kiểu "Tất cả các đáp án ` +
-    `trên", "Cả A và B", "Không có đáp án nào đúng", và không nhắc tới chữ cái A, B, C, D trong câu hỏi hay phương án.\n` +
+    `trên", "Cả A và B", "Không có đáp án nào đúng", và không nhắc tới chữ cái A, B, C, D trong câu hỏi hay phương án ` +
+    `(nếu tình huống cần đặt tên các lựa chọn thì dùng "cách 1", "cách 2" hoặc gọi tên cụ thể, không dùng "phương án A").\n` +
     `- Câu hỏi rõ ràng, không mơ hồ, viết bằng tiếng Việt.` +
     (others
       ? `\n\nCÁC NỘI DUNG SAU ĐÃ/SẼ ĐƯỢC HỎI Ở CÂU KHÁC — không được hỏi về chúng:\n${others}`

@@ -14,8 +14,9 @@ import {
 import type { QuizAttempt } from "./_lib/kv.js";
 import { DEFAULT_RESULTS_SHEET, hasStudentSubmitted } from "./_lib/sheets.js";
 import { normalizeStudentKey } from "./_lib/identity.js";
+import { displayedOptions, randomOptionOrder } from "./_lib/optionOrder.js";
 import { friendlyErrorMessage, methodNotAllowed, sendError } from "./_lib/http.js";
-import type { Difficulty, Question, QuizQuestion, StartQuizResponse } from "../shared/types.js";
+import type { AnswerKey, Difficulty, Question, QuizQuestion, StartQuizResponse } from "../shared/types.js";
 
 export const config = { maxDuration: 30 };
 
@@ -72,8 +73,14 @@ function selectQuestions(
   questions: Question[],
   numChapters: number,
   questionsPerChapter: number,
-  fixedExam: boolean
+  fixedExam: boolean,
+  useAllQuestions: boolean
 ): Question[] {
+  if (useAllQuestions) {
+    // Đề gồm đúng các câu đã tạo: lượt nào cũng đủ tất cả các câu, chỉ khác thứ tự.
+    return shuffle(questions);
+  }
+
   if (fixedExam) {
     // Đề cố định: dùng TOÀN BỘ ngân hàng câu hỏi, cùng 1 thứ tự ổn định cho mọi lượt làm bài.
     return [...questions].sort((a, b) => {
@@ -99,13 +106,13 @@ function selectQuestions(
   return shuffle(selected);
 }
 
-function toQuizQuestions(selected: Question[]): QuizQuestion[] {
-  return selected.map(({ id, question, options, chapter, difficulty }) => ({
-    id,
-    question,
-    options,
-    chapter,
-    difficulty,
+/** Câu hỏi gửi cho sinh viên: không kèm đáp án đúng/mức độ, phương án theo thứ tự đã đảo của lượt làm. */
+function toQuizQuestions(selected: Question[], optionOrders?: Record<string, AnswerKey[]>): QuizQuestion[] {
+  return selected.map((q) => ({
+    id: q.id,
+    question: q.question,
+    options: displayedOptions(q, optionOrders?.[q.id]),
+    chapter: q.chapter,
   }));
 }
 
@@ -146,7 +153,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const resume = (attempt: QuizAttempt): StartQuizResponse => ({
       attemptId: attempt.attemptId,
       questions: toQuizQuestions(
-        attempt.questionIds.map((id) => bankById.get(id)).filter((q): q is Question => !!q)
+        attempt.questionIds.map((id) => bankById.get(id)).filter((q): q is Question => !!q),
+        attempt.optionOrders
       ),
       timeLimitSeconds: attempt.timeLimitSeconds,
       remainingSeconds: remainingSecondsOf(attempt),
@@ -181,8 +189,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       questions,
       examConfig?.numChapters ?? 1,
       examConfig?.questionsPerChapterInExam ?? DEFAULT_QUESTIONS_PER_CHAPTER,
-      examConfig?.fixedExam === true
+      examConfig?.fixedExam === true,
+      examConfig?.useAllQuestions === true
     );
+
+    const optionOrders: Record<string, AnswerKey[]> | undefined = examConfig?.shuffleOptions
+      ? Object.fromEntries(selected.map((q) => [q.id, randomOptionOrder()]))
+      : undefined;
 
     const attempt: QuizAttempt = {
       attemptId: crypto.randomUUID(),
@@ -192,6 +205,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       startedAt: Date.now(),
       timeLimitSeconds,
       questionIds: selected.map((q) => q.id),
+      optionOrders,
       submitted: false,
     };
 
@@ -217,7 +231,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const response: StartQuizResponse = {
       attemptId: attempt.attemptId,
-      questions: toQuizQuestions(selected),
+      questions: toQuizQuestions(selected, optionOrders),
       timeLimitSeconds,
       remainingSeconds: timeLimitSeconds,
       resumed: false,

@@ -3,6 +3,8 @@ import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import { verifyAuthHeader } from "./_lib/auth.js";
 import { sendError } from "./_lib/http.js";
 import { claudeGenerate, toJsonSchema } from "./_lib/claude.js";
+import { QUESTIONS_PER_BATCH, generateQuestionsForPoints, planContentPoints } from "./_lib/gemini.js";
+import { getLecture } from "./_lib/kv.js";
 
 // Endpoint chẩn đoán (chỉ giảng viên): liệt kê model mà API key hiện tại thấy được và thử gọi nhanh
 // từng model ứng viên, để biết model nào dùng được. Không trả về API key.
@@ -22,6 +24,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     sendError(res, 401, "Bạn cần đăng nhập với vai trò giảng viên.");
     return;
   }
+  // ?pipeline=1: chạy thử bước lập danh sách nội dung + 1 lô câu hỏi trên bài giảng hiện có, KHÔNG lưu gì.
+  if (req.query.pipeline) {
+    const lecture = await getLecture();
+    if (!lecture) {
+      sendError(res, 404, "Chưa có bài giảng để chạy thử.");
+      return;
+    }
+    const text = lecture.sections.map((s) => `${s.heading}\n${s.content}\n${s.examples.join("\n")}`).join("\n\n");
+    const doc = { pastedText: text, extractedTexts: [], uploadedFiles: [] };
+    const total = Number(req.query.total) || 30;
+    const t0 = Date.now();
+    try {
+      const plan = await planContentPoints(doc, total);
+      const planMs = Date.now() - t0;
+      const batch = plan.slice(0, QUESTIONS_PER_BATCH).map((_, i) => i);
+      const questions = await generateQuestionsForPoints(doc, plan, batch);
+      res.status(200).json({ planMs, batchMs: Date.now() - t0 - planMs, plan, questions });
+    } catch (err) {
+      res.status(200).json({ ms: Date.now() - t0, error: err instanceof Error ? err.message.slice(0, 800) : String(err) });
+    }
+    return;
+  }
+
   // ?claude=1: kiểm tra nhanh Claude API (gọi văn bản và gọi có schema JSON) và đo độ trễ.
   if (req.query.claude) {
     const run = async (label: string, schema?: Record<string, unknown>) => {

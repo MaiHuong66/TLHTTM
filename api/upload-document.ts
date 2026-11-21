@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { verifyAuthHeader } from "./_lib/auth.js";
 import { saveUploadJob } from "./_lib/kv.js";
 import type { UploadJob } from "./_lib/kv.js";
-import { planExtractionChunksPerChapter, planQuestionBatches, uploadFilesToAi } from "./_lib/gemini.js";
+import { QUESTIONS_PER_BATCH, uploadFilesToAi } from "./_lib/gemini.js";
 import type { DocumentInput } from "./_lib/gemini.js";
 import {
   DOCX_MIME_TYPES,
@@ -20,18 +20,14 @@ import type { StartUploadResponse, UploadFilePayload } from "../shared/types.js"
 export const config = { maxDuration: 60 };
 
 const MAX_TOTAL_RAW_BYTES = 4 * 1024 * 1024;
-const MAX_CHAPTERS = 20;
-const MAX_BANK_QUESTIONS = 500;
-const MAX_EXAM_PER_CHAPTER = 100;
+const DEFAULT_QUESTIONS = 30;
+const MAX_QUESTIONS = 100;
 const MAX_TIME_LIMIT_MINUTES = 600;
 
 interface UploadBody {
   pastedText?: string;
   files?: UploadFilePayload[];
-  numChapters?: number;
-  totalBankQuestions?: number;
-  questionsPerChapterInExam?: number;
-  fixedExam?: boolean;
+  totalQuestions?: number;
   allowRetake?: boolean;
   timeLimitMinutes?: number;
 }
@@ -81,13 +77,7 @@ async function handleStart(req: VercelRequest, res: VercelResponse) {
     return;
   }
 
-  const numChapters = parsePositiveInt(body.numChapters, 1, MAX_CHAPTERS);
-  const totalBankQuestions = Math.max(
-    numChapters,
-    parsePositiveInt(body.totalBankQuestions, 100, MAX_BANK_QUESTIONS)
-  );
-  const questionsPerChapterInExam = parsePositiveInt(body.questionsPerChapterInExam, 60, MAX_EXAM_PER_CHAPTER);
-  const fixedExam = body.fixedExam === true;
+  const totalQuestions = parsePositiveInt(body.totalQuestions, DEFAULT_QUESTIONS, MAX_QUESTIONS);
   const allowRetake = body.allowRetake === true;
   // 0 = không giới hạn; giá trị không hợp lệ cũng coi là không giới hạn.
   const rawLimit = typeof body.timeLimitMinutes === "number" ? Math.floor(body.timeLimitMinutes) : 0;
@@ -147,19 +137,12 @@ async function handleStart(req: VercelRequest, res: VercelResponse) {
     return;
   }
 
-  const questionSteps = planQuestionBatches(numChapters, totalBankQuestions);
-  const stepBatchSizes: Record<string, number> = {};
-  for (const s of questionSteps) stepBatchSizes[s.key] = s.count;
-
-  // Chia nhỏ việc trích xuất mỗi chương thành nhiều bước (mỗi bước ~1 phần chương) để luôn an toàn
-  // với trần 60s, kể cả khi chương dài — xem planExtractionChunksPerChapter().
-  const docInput: DocumentInput = { pastedText, extractedTexts, uploadedFiles };
-  const extractSteps: string[] = [];
-  for (let chapter = 1; chapter <= numChapters; chapter++) {
-    const chunks = planExtractionChunksPerChapter(docInput, numChapters);
-    for (let chunkIdx = 0; chunkIdx < chunks; chunkIdx++) {
-      extractSteps.push(`extract:${chapter}:${chunkIdx}:${chunks}`);
-    }
+  // Bước "plan" lập danh sách `totalQuestions` nội dung riêng biệt; sau đó mỗi bước "q:*" soạn câu hỏi cho 1 lô
+  // nội dung (theo vị trí trong danh sách) — mỗi bước là 1 lần gọi AI, luôn an toàn với trần 60s.
+  const questionSteps: string[] = [];
+  for (let start = 0; start < totalQuestions; start += QUESTIONS_PER_BATCH) {
+    const end = Math.min(start + QUESTIONS_PER_BATCH, totalQuestions);
+    questionSteps.push(`q:${Array.from({ length: end - start }, (_, i) => start + i).join(",")}`);
   }
 
   const jobId = crypto.randomUUID();
@@ -168,16 +151,13 @@ async function handleStart(req: VercelRequest, res: VercelResponse) {
     pastedText,
     extractedTexts,
     uploadedFiles,
-    numChapters,
-    questionsPerChapterInExam,
-    fixedExam,
+    totalQuestions,
     allowRetake,
     timeLimitMinutes,
-    steps: ["lecture", ...extractSteps, ...questionSteps.map((s) => s.key)],
-    stepBatchSizes,
-    totalSteps: 1 + extractSteps.length + questionSteps.length,
-    chapterTexts: {},
-    questionBatches: {},
+    steps: ["lecture", "plan", ...questionSteps],
+    totalSteps: 2 + questionSteps.length,
+    questionsByPoint: {},
+    retriedPoints: [],
   };
 
   try {

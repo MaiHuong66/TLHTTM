@@ -10,11 +10,10 @@ import {
   setQuestions,
 } from "./_lib/kv.js";
 import {
-  QUESTION_FOCUS_HINTS,
-  extractChapterChunk,
   finalizeQuestions,
   generateLecture,
-  generateQuestionBatch,
+  generateQuestionsForPoints,
+  planContentPoints,
 } from "./_lib/gemini.js";
 import type { DocumentInput } from "./_lib/gemini.js";
 import { isServiceUnavailableError, rateLimitRetrySeconds } from "./_lib/retry.js";
@@ -99,48 +98,29 @@ async function handleStep(req: VercelRequest, res: VercelResponse) {
   try {
     if (nextStep === "lecture") {
       job.lecture = await generateLecture(doc);
-    } else if (nextStep.startsWith("extract:")) {
-      // Step key dạng "extract:{chương}:{số thứ tự chunk}:{tổng số chunk của chương}"
-      const [, chapterStr, chunkIdxStr, totalChunksStr] = nextStep.split(":");
-      const chapter = Number(chapterStr);
-      const chunkIdx = Number(chunkIdxStr);
-      const totalChunks = Number(totalChunksStr);
-
-      const previousText = job.chapterTexts[chapter] ?? "";
-      const chunkText = await extractChapterChunk(doc, chapter, job.numChapters, chunkIdx, totalChunks, previousText);
-      job.chapterTexts[chapter] = previousText ? `${previousText}\n\n${chunkText}` : chunkText;
+    } else if (nextStep === "plan") {
+      job.plan = await planContentPoints(doc, job.totalQuestions);
     } else {
-      // Step key dạng "q:{chương}:{số thứ tự lô trong chương}"
-      const [, chapterStr, idxStr] = nextStep.split(":");
-      const chapter = Number(chapterStr);
-      const idx = Number(idxStr);
-      const count = job.stepBatchSizes[nextStep] ?? 10;
-      const focusHint = QUESTION_FOCUS_HINTS[idx % QUESTION_FOCUS_HINTS.length];
+      // Step key dạng "q:{vị trí nội dung},{vị trí nội dung},..." (vị trí trong job.plan). Tài liệu ngắn có thể có ít
+      // nội dung hơn số câu yêu cầu — khi đó bỏ qua các vị trí không tồn tại.
+      const plan = job.plan ?? [];
+      const pointIndexes = nextStep
+        .slice(2)
+        .split(",")
+        .map(Number)
+        .filter((i) => Number.isInteger(i) && i < plan.length);
 
-      // Gom câu hỏi đã sinh trước đó trong CÙNG chương để nhắc Gemini tránh trùng/diễn đạt lại.
-      // Giới hạn số lượng (lấy các lô GẦN NHẤT) để prompt không phình to dần khi 1 chương có nhiều
-      // lô — nếu không giới hạn, các lô cuối của 1 chương lớn (vd 100 câu/chương) sẽ ngày càng chậm
-      // và có thể vượt 60s.
-      const MAX_AVOID_QUESTIONS = 30;
-      const avoidQuestions = Object.entries(job.questionBatches)
-        .filter(([key]) => Number(key.split(":")[1]) === chapter)
-        .flatMap(([, items]) => items.map((q) => q.question))
-        .slice(-MAX_AVOID_QUESTIONS);
+      if (pointIndexes.length > 0) {
+        Object.assign(job.questionsByPoint, await generateQuestionsForPoints(doc, plan, pointIndexes));
 
-      // Dùng text đã tách riêng cho chương này (nhanh hơn nhiều) thay vì đọc lại toàn bộ tài liệu gốc.
-      const chapterText = job.chapterTexts[chapter];
-      const chapterDoc: DocumentInput = chapterText
-        ? { pastedText: chapterText, extractedTexts: [], uploadedFiles: [] }
-        : doc;
-
-      job.questionBatches[nextStep] = await generateQuestionBatch(
-        chapterDoc,
-        count,
-        chapter,
-        job.numChapters,
-        focusHint,
-        avoidQuestions
-      );
+        // Nội dung AI trả về thiếu/không hợp lệ: cho sinh lại 1 lần ở 1 bước bổ sung cuối hàng đợi.
+        const missing = pointIndexes.filter((i) => !job.questionsByPoint[i] && !job.retriedPoints.includes(i));
+        if (missing.length > 0) {
+          job.retriedPoints.push(...missing);
+          job.steps.push(`q:${missing.join(",")}`);
+          job.totalSteps++;
+        }
+      }
     }
   } catch (err) {
     console.error(
@@ -199,11 +179,8 @@ async function handleStep(req: VercelRequest, res: VercelResponse) {
 
   let questions;
   try {
-    const batchesForFinalize = Object.entries(job.questionBatches).map(([key, items]) => ({
-      chapter: Number(key.split(":")[1]),
-      items,
-    }));
-    questions = finalizeQuestions(batchesForFinalize);
+    const ordered = (job.plan ?? []).map((_, i) => job.questionsByPoint[i]).filter((q) => q !== undefined);
+    questions = finalizeQuestions(ordered);
   } catch (err) {
     console.error(`upload-step: finalizeQuestions failed for job ${jobId}:`, err);
     sendError(res, 500, friendlyErrorMessage(err));
@@ -214,11 +191,13 @@ async function handleStep(req: VercelRequest, res: VercelResponse) {
     await setLecture({ ...job.lecture, updatedAt: new Date().toISOString() });
     await setQuestions(questions);
     await setExamConfig({
-      numChapters: job.numChapters,
-      questionsPerChapterInExam: job.questionsPerChapterInExam,
-      fixedExam: job.fixedExam,
+      numChapters: 1,
+      questionsPerChapterInExam: questions.length,
+      fixedExam: false,
       allowRetake: job.allowRetake,
       timeLimitMinutes: job.timeLimitMinutes ?? 0,
+      useAllQuestions: true,
+      shuffleOptions: true,
     });
   } catch (err) {
     console.error(`upload-step: failed to save final data for job ${jobId}:`, err);

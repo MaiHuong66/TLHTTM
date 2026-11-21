@@ -8,9 +8,6 @@ import type { ClaudeMessage, ClaudePart } from "./claude.js";
 // Google ngừng cấp gemini-2.5-flash cho tài khoản mới (404 NOT_FOUND). gemini-3.5-flash đã được kiểm tra chạy ổn định
 // (gemini-3.8-flash hay bị 503 quá tải); có thể đổi bằng biến môi trường GEMINI_MODEL mà không cần sửa code.
 const MODEL = process.env.GEMINI_MODEL?.trim() || "gemini-3.5-flash";
-// Mỗi lô câu hỏi giờ chỉ đọc phần text đã trích xuất riêng cho chương đó (xem extractChapterContent),
-// không phải đọc lại toàn bộ tài liệu gốc — nên có thể để lô lớn hơn mà vẫn an toàn với trần 60s.
-export const MAX_QUESTIONS_PER_BATCH_CALL = 10;
 
 let client: GoogleGenAI | null = null;
 
@@ -219,80 +216,6 @@ function buildDocumentParts(doc: DocumentInput): Part[] {
   return parts;
 }
 
-// Trích xuất mỗi lần khoảng ngần này ký tự nguồn — đủ nhỏ để phản hồi luôn xong an toàn trong 60s,
-// kể cả với chương dài. Càng nhiều ký tự nguồn thì càng cần chia làm nhiều lần trích xuất hơn.
-const SOURCE_CHARS_PER_EXTRACTION_CHUNK = 12000;
-const MIN_CHUNKS_PER_CHAPTER = 2;
-const MAX_CHUNKS_PER_CHAPTER = 8;
-
-/** Số lần trích xuất cần thiết cho mỗi chương — dựa trên độ dài tài liệu đã biết (text dán trực tiếp
- * hoặc trích từ DOCX/XLSX); nếu tài liệu chỉ có file PDF/ảnh (không biết trước độ dài text), dùng mặc
- * định an toàn. */
-export function planExtractionChunksPerChapter(doc: DocumentInput, numChapters: number): number {
-  const knownLength = doc.pastedText.length + doc.extractedTexts.reduce((sum, t) => sum + t.text.length, 0);
-  if (knownLength === 0) {
-    return numChapters > 1 ? 4 : 2;
-  }
-  const perChapterChars = knownLength / numChapters;
-  const chunks = Math.ceil(perChapterChars / SOURCE_CHARS_PER_EXTRACTION_CHUNK);
-  return Math.min(MAX_CHUNKS_PER_CHAPTER, Math.max(MIN_CHUNKS_PER_CHAPTER, chunks));
-}
-
-/**
- * Đọc toàn bộ tài liệu gốc và trích xuất riêng nội dung của 1 chương, CHIA THÀNH NHIỀU LẦN GỌI nhỏ
- * (mỗi lần khoảng 1/N chương) thay vì trích xuất toàn bộ chương trong 1 lần — vì trích xuất "đầy đủ"
- * một chương dài trong 1 lần dễ khiến phản hồi quá dài, vượt giới hạn 60s. Mỗi lần gọi tiếp nối ngay
- * sau đoạn đã trích xuất ở (các) lần trước (truyền vào qua `previousText`), giúp không lặp/không sót.
- * Kết quả các lần được nối lại ở nơi gọi (api/upload-step.ts) để thành nội dung đầy đủ của chương.
- */
-export async function extractChapterChunk(
-  doc: DocumentInput,
-  chapter: number,
-  numChapters: number,
-  chunkIndex: number,
-  totalChunks: number,
-  previousText: string
-): Promise<string> {
-  const chapterLabel =
-    numChapters > 1
-      ? `chương/phần thứ ${chapter} trong tổng số ${numChapters} chương/phần (phần này thường được đánh dấu là ` +
-        `"Chương ${chapter}", "Phần ${chapter}" hoặc tương đương trong văn bản)`
-      : `toàn bộ tài liệu`;
-
-  const previousTail = previousText.trim().slice(-400);
-
-  const positionInstruction =
-    chunkIndex === 0
-      ? `Đây là LẦN TRÍCH XUẤT THỨ 1/${totalChunks} cho ${chapterLabel}. Hãy trích xuất và trình bày lại ĐẦY ĐỦ, ` +
-        `chi tiết khoảng 1/${totalChunks} nội dung ĐẦU TIÊN của phần này, tính từ đầu.`
-      : `Đây là LẦN TRÍCH XUẤT THỨ ${chunkIndex + 1}/${totalChunks} cho ${chapterLabel}. Ở (các) lần trước, bạn đã ` +
-        `trích xuất tới đoạn kết thúc bằng: "...${previousTail}". Hãy tiếp tục trích xuất và trình bày lại ĐẦY ĐỦ, ` +
-        `chi tiết PHẦN TIẾP THEO (không lặp lại nội dung đã trích xuất ở trên), khoảng 1/${totalChunks} nội dung ` +
-        `còn lại.` +
-        (chunkIndex === totalChunks - 1
-          ? ` Đây là LẦN CUỐI CÙNG — phải lấy hết phần còn lại cho tới hết, không được dừng giữa chừng.`
-          : "");
-
-  const instruction =
-    `Đọc toàn bộ tài liệu bên dưới. ${positionInstruction} Giữ nguyên mọi khái niệm, định nghĩa, số liệu, ví dụ ` +
-    `quan trọng. ${numChapters > 1 ? "TUYỆT ĐỐI KHÔNG lẫn nội dung của các chương/phần khác vào. " : ""}` +
-    `Trình bày dưới dạng văn bản thuần, dùng tiêu đề cho từng mục con nếu có để rõ ràng. Trả lời bằng tiếng Việt.`;
-
-  const result = await llm({ instruction, doc, maxOutputTokens: 16384 });
-
-  if (result.truncated) {
-    throw new Error(
-      `Một phần nội dung quá dài, không trích xuất được trong 1 lần (chương ${chapter}, lần ${chunkIndex + 1}/${totalChunks}). Vui lòng thử lại.`
-    );
-  }
-
-  const text = result.text;
-  if (!text) {
-    throw new Error(`Không trích xuất được nội dung (chương ${chapter}, lần ${chunkIndex + 1}/${totalChunks}).`);
-  }
-  return text;
-}
-
 const lectureSchema = {
   type: Type.OBJECT,
   properties: {
@@ -336,24 +259,131 @@ export async function generateLecture(doc: DocumentInput): Promise<Omit<Lecture,
   return parsed;
 }
 
+/** 4 mức độ nhận thức dùng khi ra đề, theo thứ tự từ thấp tới cao. */
+export const COGNITIVE_LEVELS: Difficulty[] = ["Nhận biết", "Thông hiểu", "Vận dụng", "Vận dụng cao"];
+
+const LEVEL_GUIDE =
+  `"Nhận biết": nhớ lại, nhận ra đúng khái niệm, định nghĩa, sự kiện, thuật ngữ có trong tài liệu. ` +
+  `"Thông hiểu": giải thích, phân biệt, so sánh, diễn giải ý nghĩa, nhận ra ví dụ đúng của một khái niệm. ` +
+  `"Vận dụng": áp dụng kiến thức vào một tình huống cụ thể, quen thuộc để giải quyết vấn đề hoặc chọn cách làm đúng. ` +
+  `"Vận dụng cao": xử lý tình huống mới, phức tạp, cần phân tích, đánh giá hoặc kết hợp nhiều bước suy luận.`;
+
+/** Số mỗi lô câu hỏi — đủ nhỏ để 1 lần gọi AI luôn xong trong giới hạn 60s của Vercel. */
+export const QUESTIONS_PER_BATCH = 8;
+
+/** Một đơn vị nội dung kiến thức riêng biệt trong tài liệu; mỗi đơn vị được hỏi đúng 1 câu. */
+export interface ContentPoint {
+  topic: string;
+  level: Difficulty;
+}
+
+/** Chia đều `total` câu cho 4 mức độ, phần dư dồn cho các mức thấp trước (vd 30 → 8, 8, 7, 7). */
+export function levelTargets(total: number): Map<Difficulty, number> {
+  const base = Math.floor(total / COGNITIVE_LEVELS.length);
+  const remainder = total % COGNITIVE_LEVELS.length;
+  return new Map(COGNITIVE_LEVELS.map((level, i) => [level, base + (i < remainder ? 1 : 0)]));
+}
+
+function normalizeText(text: string): string {
+  return text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
+
+/** Bỏ nội dung trùng, rồi đảm bảo số nội dung mỗi mức đúng chỉ tiêu: nội dung thừa ở 1 mức được chuyển sang
+ * mức còn thiếu. Giữ nguyên thứ tự xuất hiện trong tài liệu. */
+export function balanceContentPoints(points: ContentPoint[], total: number): ContentPoint[] {
+  const targets = levelTargets(total);
+  const seen = new Set<string>();
+  const unique = points.filter((p) => {
+    const key = normalizeText(p.topic);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  const counts = new Map<Difficulty, number>(COGNITIVE_LEVELS.map((l) => [l, 0]));
+  const assigned: (ContentPoint | null)[] = unique.map((p) => {
+    const level = COGNITIVE_LEVELS.includes(p.level) ? p.level : null;
+    if (level && counts.get(level)! < targets.get(level)!) {
+      counts.set(level, counts.get(level)! + 1);
+      return { topic: p.topic, level };
+    }
+    return null;
+  });
+
+  unique.forEach((p, i) => {
+    if (assigned[i]) return;
+    const missing = COGNITIVE_LEVELS.find((l) => counts.get(l)! < targets.get(l)!);
+    if (!missing) return;
+    counts.set(missing, counts.get(missing)! + 1);
+    assigned[i] = { topic: p.topic, level: missing };
+  });
+
+  return assigned.filter((p): p is ContentPoint => p !== null).slice(0, total);
+}
+
+const contentPlanSchema = {
+  type: Type.ARRAY,
+  items: {
+    type: Type.OBJECT,
+    properties: {
+      topic: {
+        type: Type.STRING,
+        description: "Mô tả cụ thể 1 đơn vị nội dung kiến thức (1-2 câu), đủ rõ để biết chính xác sẽ hỏi điều gì",
+      },
+      level: { type: Type.STRING, enum: COGNITIVE_LEVELS },
+    },
+    required: ["topic", "level"],
+  },
+};
+
+/** Bước 1: liệt kê đúng `total` đơn vị nội dung KHÁC NHAU trong tài liệu và gán mức độ cho từng đơn vị — để mỗi
+ * câu hỏi sau đó kiểm tra 1 nội dung riêng, không có 2 câu cùng hỏi 1 nội dung theo 2 cách. */
+export async function planContentPoints(doc: DocumentInput, total: number): Promise<ContentPoint[]> {
+  const targets = levelTargets(total);
+  const quota = COGNITIVE_LEVELS.map((l) => `${targets.get(l)} "${l}"`).join(", ");
+
+  const instruction =
+    `Bạn là chuyên gia ra đề kiểm tra trắc nghiệm. Đọc toàn bộ tài liệu bên dưới và lập danh sách ĐÚNG ${total} ` +
+    `đơn vị nội dung kiến thức để ra ${total} câu hỏi, mỗi đơn vị sẽ được hỏi đúng 1 câu.\n` +
+    `Yêu cầu:\n` +
+    `- Mỗi đơn vị là MỘT ý kiến thức cụ thể, riêng biệt (một khái niệm, định nghĩa, đặc điểm, nguyên tắc, quy trình, ` +
+    `ứng dụng...). Hai đơn vị bất kỳ KHÔNG được trùng nhau, không bao hàm nhau, không phải 2 cách diễn đạt/2 cách ` +
+    `hỏi khác nhau của cùng một ý.\n` +
+    `- Trải đều khắp các phần của tài liệu, không dồn vào một phần.\n` +
+    `- Chỉ lấy nội dung có trong tài liệu.\n` +
+    `- Gán mức độ cho từng đơn vị, phân bổ đúng: ${quota}. Mức độ phải phù hợp với nội dung. ${LEVEL_GUIDE}\n` +
+    `- Liệt kê theo thứ tự xuất hiện trong tài liệu. Viết bằng tiếng Việt.`;
+
+  const result = await llm({ instruction, doc, schema: contentPlanSchema, maxOutputTokens: 6000 });
+  const parsed = result.json as ContentPoint[] | undefined;
+  if (!Array.isArray(parsed)) {
+    throw new Error("AI trả về danh sách nội dung không hợp lệ.");
+  }
+
+  const points = balanceContentPoints(
+    parsed.filter((p) => p && typeof p.topic === "string"),
+    total
+  );
+  if (points.length === 0) {
+    throw new Error("Không tìm được nội dung nào trong tài liệu để ra câu hỏi.");
+  }
+  return points;
+}
+
 const questionBatchSchema = {
   type: Type.ARRAY,
   items: {
     type: Type.OBJECT,
     properties: {
+      contentNumber: { type: Type.INTEGER, description: "Số thứ tự của nội dung được giao mà câu hỏi này kiểm tra" },
       question: { type: Type.STRING },
       optionA: { type: Type.STRING },
       optionB: { type: Type.STRING },
       optionC: { type: Type.STRING },
       optionD: { type: Type.STRING },
       correctAnswer: { type: Type.STRING, enum: ["A", "B", "C", "D"] },
-      difficulty: {
-        type: Type.STRING,
-        enum: ["Cơ bản", "Trung bình", "Nâng cao"],
-        description: "Mức độ khó thực sự của câu hỏi này",
-      },
     },
-    required: ["question", "optionA", "optionB", "optionC", "optionD", "correctAnswer", "difficulty"],
+    required: ["contentNumber", "question", "optionA", "optionB", "optionC", "optionD", "correctAnswer"],
   },
 };
 
@@ -367,106 +397,91 @@ export interface RawQuestion {
   difficulty: Difficulty;
 }
 
-export const QUESTION_FOCUS_HINTS = [
-  "tập trung vào các khái niệm và định nghĩa cốt lõi",
-  "tập trung vào ví dụ minh họa và ứng dụng thực tế",
-  "tập trung vào so sánh, phân tích và các trường hợp đặc biệt",
-  "tập trung vào tổng hợp và các nội dung còn lại chưa khai thác",
-];
+const ANSWER_KEYS: AnswerKey[] = ["A", "B", "C", "D"];
 
-export interface QuestionBatchStep {
-  key: string;
-  chapter: number;
-  count: number;
-}
-
-/** Chia tổng số câu hỏi ngân hàng thành các lô nhỏ (≤10 câu/lô) theo từng chương để mỗi lệnh
- * gọi Gemini luôn nhẹ và nhanh, kể cả khi tổng số câu hỏi hoặc số chương lớn. */
-export function planQuestionBatches(numChapters: number, totalBankQuestions: number): QuestionBatchStep[] {
-  const perChapterTarget = Math.max(1, Math.ceil(totalBankQuestions / numChapters));
-  const steps: QuestionBatchStep[] = [];
-
-  for (let chapter = 1; chapter <= numChapters; chapter++) {
-    let remaining = perChapterTarget;
-    let idx = 0;
-    while (remaining > 0) {
-      const count = Math.min(MAX_QUESTIONS_PER_BATCH_CALL, remaining);
-      steps.push({ key: `q:${chapter}:${idx}`, chapter, count });
-      remaining -= count;
-      idx++;
-    }
-  }
-
-  return steps;
-}
-
-export async function generateQuestionBatch(
+/** Bước 2: soạn đúng 1 câu cho mỗi nội dung được giao (`pointIndexes` là vị trí trong `plan`). Trả về câu hỏi
+ * theo vị trí nội dung; nội dung nào AI không trả về câu hợp lệ sẽ không có trong kết quả. */
+export async function generateQuestionsForPoints(
   doc: DocumentInput,
-  count: number,
-  chapter: number,
-  numChapters: number,
-  focusHint: string,
-  avoidQuestions: string[] = []
-): Promise<RawQuestion[]> {
-  const chapterInstruction =
-    numChapters > 1
-      ? `CHỈ dựa vào nội dung của chương/phần thứ ${chapter} trong tổng số ${numChapters} chương/phần của tài ` +
-        `liệu (phần này thường được đánh dấu là "Chương ${chapter}", "Phần ${chapter}" hoặc tương đương trong ` +
-        `văn bản). TUYỆT ĐỐI KHÔNG dùng nội dung của các chương/phần khác. `
-      : "";
-
-  const avoidInstruction =
-    avoidQuestions.length > 0
-      ? `\n\nDưới đây là danh sách các câu hỏi ĐÃ ĐƯỢC TẠO TRƯỚC ĐÓ (cùng chương/phần này) — TUYỆT ĐỐI KHÔNG ` +
-        `được tạo câu hỏi trùng lặp hoặc chỉ diễn đạt lại (paraphrase) ý của bất kỳ câu nào trong danh sách này, ` +
-        `phải khai thác khía cạnh/ý khác của tài liệu:\n` +
-        avoidQuestions.map((q, i) => `${i + 1}. ${q}`).join("\n")
-      : "";
+  plan: ContentPoint[],
+  pointIndexes: number[]
+): Promise<Record<number, RawQuestion>> {
+  const assigned = pointIndexes
+    .map((idx, i) => `${i + 1}. [${plan[idx].level}] ${plan[idx].topic}`)
+    .join("\n");
+  const others = plan
+    .map((p, idx) => ({ p, idx }))
+    .filter(({ idx }) => !pointIndexes.includes(idx))
+    .map(({ p }) => `- ${p.topic}`)
+    .join("\n");
 
   const instruction =
-            `Bạn là một chuyên gia ra đề thi trắc nghiệm. Dựa HOÀN TOÀN trên tài liệu bên dưới, hãy soạn đúng ` +
-            `${count} câu hỏi trắc nghiệm. ${chapterInstruction}Khi ra đề, hãy ${focusHint}. ` +
-            `Mỗi câu hỏi có đúng 4 đáp án A, B, C, D và chỉ 1 đáp án đúng duy nhất. Câu hỏi phải rõ ràng, ` +
-            `bám sát nội dung tài liệu, không được trùng lặp ý với nhau. Đảm bảo pha trộn đa dạng cả 3 mức độ ` +
-            `khó trong số ${count} câu này: "Cơ bản" (nhớ/hiểu kiến thức trực tiếp), "Trung bình" (vận dụng, ` +
-            `giải thích), "Nâng cao" (phân tích, so sánh, suy luận nhiều bước) — gắn đúng nhãn độ khó thực tế cho ` +
-            `từng câu, không gắn đại khái. Trả lời bằng tiếng Việt.${avoidInstruction}`;
+    `Bạn là chuyên gia ra đề kiểm tra trắc nghiệm. Dựa HOÀN TOÀN vào tài liệu bên dưới, soạn ĐÚNG 1 câu hỏi ` +
+    `trắc nghiệm cho MỖI nội dung trong danh sách được giao (tổng ${pointIndexes.length} câu), ghi contentNumber là ` +
+    `số thứ tự của nội dung đó.\n\n` +
+    `NỘI DUNG ĐƯỢC GIAO (kèm mức độ bắt buộc):\n${assigned}\n\n` +
+    `Yêu cầu cho từng câu:\n` +
+    `- Chỉ kiểm tra đúng nội dung được giao cho câu đó, đúng mức độ ghi trong ngoặc vuông. ${LEVEL_GUIDE}\n` +
+    `- Không hỏi lại nội dung của câu khác, kể cả bằng cách diễn đạt khác.\n` +
+    `- Có đúng 4 phương án, chỉ 1 phương án đúng; các phương án sai phải hợp lý, cùng dạng và độ dài tương đương ` +
+    `phương án đúng.\n` +
+    `- Thứ tự các phương án sẽ bị XÁO TRỘN khi thi, nên TUYỆT ĐỐI KHÔNG dùng phương án kiểu "Tất cả các đáp án ` +
+    `trên", "Cả A và B", "Không có đáp án nào đúng", và không nhắc tới chữ cái A, B, C, D trong câu hỏi hay phương án.\n` +
+    `- Câu hỏi rõ ràng, không mơ hồ, viết bằng tiếng Việt.` +
+    (others
+      ? `\n\nCÁC NỘI DUNG SAU ĐÃ/SẼ ĐƯỢC HỎI Ở CÂU KHÁC — không được hỏi về chúng:\n${others}`
+      : "");
 
   const result = await llm({ instruction, doc, schema: questionBatchSchema, maxOutputTokens: 8000 });
-
-  const parsed = result.json as RawQuestion[];
+  const parsed = result.json as (Omit<RawQuestion, "difficulty"> & { contentNumber: number })[] | undefined;
   if (!Array.isArray(parsed)) {
-    throw new Error("AI trả về ngân hàng câu hỏi không hợp lệ.");
+    throw new Error("AI trả về câu hỏi không hợp lệ.");
   }
-  return parsed;
+
+  const byPoint: Record<number, RawQuestion> = {};
+  for (const q of parsed) {
+    const pointIdx = pointIndexes[Number(q?.contentNumber) - 1];
+    if (pointIdx === undefined || byPoint[pointIdx]) continue;
+    const options = [q.optionA, q.optionB, q.optionC, q.optionD];
+    if (typeof q.question !== "string" || !q.question.trim()) continue;
+    if (options.some((o) => typeof o !== "string" || !o.trim())) continue;
+    if (new Set(options.map(normalizeText)).size !== 4) continue;
+    if (!ANSWER_KEYS.includes(q.correctAnswer)) continue;
+    byPoint[pointIdx] = {
+      question: q.question.trim(),
+      optionA: q.optionA.trim(),
+      optionB: q.optionB.trim(),
+      optionC: q.optionC.trim(),
+      optionD: q.optionD.trim(),
+      correctAnswer: q.correctAnswer,
+      difficulty: plan[pointIdx].level,
+    };
+  }
+  return byPoint;
 }
 
-/** Gộp các lô câu hỏi đã sinh (mỗi lô từ 1 lệnh gọi Gemini riêng), khử trùng và gán ID + chương. */
-export function finalizeQuestions(batches: { chapter: number; items: RawQuestion[] }[]): Question[] {
+/** Ghép câu hỏi theo thứ tự nội dung, bỏ câu trùng chữ và gán ID. */
+export function finalizeQuestions(items: RawQuestion[]): Question[] {
   const seen = new Set<string>();
   const questions: Question[] = [];
-  let counter = 1;
 
-  for (const batch of batches) {
-    for (const raw of batch.items) {
-      const key = raw.question.trim().toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      questions.push({
-        id: `q${counter++}`,
-        question: raw.question,
-        options: { A: raw.optionA, B: raw.optionB, C: raw.optionC, D: raw.optionD },
-        correctAnswer: raw.correctAnswer,
-        chapter: batch.chapter,
-        difficulty: raw.difficulty,
-      });
-    }
+  for (const raw of items) {
+    const key = normalizeText(raw.question);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    questions.push({
+      id: `q${questions.length + 1}`,
+      question: raw.question,
+      options: { A: raw.optionA, B: raw.optionB, C: raw.optionC, D: raw.optionD },
+      correctAnswer: raw.correctAnswer,
+      chapter: 1,
+      difficulty: raw.difficulty,
+    });
   }
 
   if (questions.length === 0) {
     throw new Error("Không sinh được câu hỏi nào từ tài liệu.");
   }
-
   return questions;
 }
 

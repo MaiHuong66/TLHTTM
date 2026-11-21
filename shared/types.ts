@@ -14,7 +14,8 @@ export interface Lecture {
 
 export type AnswerKey = "A" | "B" | "C" | "D";
 
-export type Difficulty = "Cơ bản" | "Trung bình" | "Nâng cao";
+/** 4 mức độ nhận thức hiện dùng; 3 mức "Cơ bản/Trung bình/Nâng cao" chỉ còn ở dữ liệu tạo trước đây. */
+export type Difficulty = "Nhận biết" | "Thông hiểu" | "Vận dụng" | "Vận dụng cao" | "Cơ bản" | "Trung bình" | "Nâng cao";
 
 export interface Question {
   id: string;
@@ -26,7 +27,8 @@ export interface Question {
   difficulty: Difficulty;
 }
 
-export type QuizQuestion = Omit<Question, "correctAnswer">;
+/** Câu hỏi gửi cho sinh viên khi làm bài — không có đáp án đúng và mức độ. */
+export type QuizQuestion = Omit<Question, "correctAnswer" | "difficulty">;
 
 export interface QuizReviewItem {
   id: string;
@@ -69,15 +71,9 @@ export interface ApiErrorBody {
 }
 
 export interface UploadConfig {
-  /** Số chương/phần trong tài liệu. 1 nghĩa là không chia chương (mặc định cũ). */
-  numChapters: number;
-  /** Tổng số câu hỏi trong ngân hàng (chia đều cho các chương). */
-  totalBankQuestions: number;
-  /** Số câu hỏi lấy từ MỖI chương khi random đề thi. Với numChapters=1, đây là tổng số câu của đề.
-   * Bị bỏ qua nếu fixedExam=true. */
-  questionsPerChapterInExam: number;
-  /** true: đề thi = TOÀN BỘ ngân hàng câu hỏi, cố định, không random mỗi lần làm. */
-  fixedExam: boolean;
+  /** Số câu hỏi của đề (mỗi câu 1 nội dung riêng, chia đều 4 mức độ). Mọi lượt làm dùng đủ các câu này,
+   * chỉ đảo thứ tự câu và thứ tự đáp án. */
+  totalQuestions: number;
   /** true: sinh viên được làm bài nhiều lần (không chặn nộp lần 2 trở đi theo Họ tên + Lớp). */
   allowRetake: boolean;
   /** Giới hạn thời gian làm bài (phút), tính từ lúc sinh viên bấm bắt đầu. 0 = không giới hạn. */

@@ -11,6 +11,7 @@ import {
 import { appendResult } from "./_lib/sheets.js";
 import { generateAssessment } from "./_lib/gemini.js";
 import { normalizeStudentKey } from "./_lib/identity.js";
+import { ANSWER_KEYS, displayedOptions, toDisplayedKey, toOriginalKey } from "./_lib/optionOrder.js";
 import { friendlyErrorMessage, methodNotAllowed, sendError } from "./_lib/http.js";
 import type { AnswerKey, QuizReviewItem, SubmitTestResponse } from "../shared/types.js";
 
@@ -95,14 +96,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     for (const id of attempt.questionIds) {
       const question = bankById.get(id);
       if (!question) continue;
-      const chosen = answers[id] ?? null;
-      const isCorrect = chosen === question.correctAnswer;
+      // Sinh viên chọn theo vị trí đáp án HIỂN THỊ (đã đảo); đổi về đáp án gốc để chấm.
+      const order = attempt.optionOrders?.[id];
+      const raw = answers[id];
+      const chosen = raw && ANSWER_KEYS.includes(raw) ? raw : null;
+      const isCorrect = chosen !== null && toOriginalKey(chosen, order) === question.correctAnswer;
       if (isCorrect) score++;
       review.push({
         id: question.id,
         question: question.question,
-        options: question.options,
-        correctAnswer: question.correctAnswer,
+        options: displayedOptions(question, order),
+        correctAnswer: toDisplayedKey(question.correctAnswer, order),
         chosen,
         isCorrect,
       });

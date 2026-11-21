@@ -55,12 +55,9 @@ function readFileAsBase64(file: File): Promise<string> {
 export function TeacherUploadPage() {
   const [pastedText, setPastedText] = useState("");
   const [files, setFiles] = useState<File[]>([]);
-  const [numChapters, setNumChapters] = useState(1);
-  const [totalBankQuestions, setTotalBankQuestions] = useState(100);
-  const [questionsPerChapterInExam, setQuestionsPerChapterInExam] = useState(60);
-  const [fixedExam, setFixedExam] = useState(false);
+  const [totalQuestions, setTotalQuestions] = useState(30);
   const [allowRetake, setAllowRetake] = useState(false);
-  const [timeLimitMinutes, setTimeLimitMinutes] = useState(0);
+  const [timeLimitMinutes, setTimeLimitMinutes] = useState(15);
   const [loadingMessage, setLoadingMessage] = useState<string | null>(null);
   const { token } = useTeacherAuth();
   const { showToast } = useToast();
@@ -96,10 +93,7 @@ export function TeacherUploadPage() {
       );
 
       const { jobId, totalSteps } = await startUpload(token, pastedText, payloadFiles, {
-        numChapters,
-        totalBankQuestions,
-        questionsPerChapterInExam,
-        fixedExam,
+        totalQuestions,
         allowRetake,
         timeLimitMinutes,
       });
@@ -107,12 +101,12 @@ export function TeacherUploadPage() {
       let step: UploadStepResponse = { status: "processing", completedSteps: 0, totalSteps };
       while (step.status === "processing") {
         const progress = `(${step.completedSteps}/${step.totalSteps})`;
-        setLoadingMessage(`AI đang tạo bài giảng và ngân hàng câu hỏi... ${progress}`);
+        setLoadingMessage(`AI đang tạo bài giảng và câu hỏi... ${progress}`);
         step = await processStepWithRetry(token, jobId, (n, waitSec, rateLimited) =>
           setLoadingMessage(
             rateLimited
-              ? `Gemini đang giới hạn tần suất (hạn mức theo phút), chờ ${waitSec} giây rồi tự thử lại (lần ${n}/${MAX_STEP_RETRIES})... ${progress}`
-              : `Gemini đang bận hoặc mạng chập chờn, tự thử lại bước này (lần ${n}/${MAX_STEP_RETRIES})... ${progress}`
+              ? `AI đang giới hạn tần suất, chờ ${waitSec} giây rồi tự thử lại (lần ${n}/${MAX_STEP_RETRIES})... ${progress}`
+              : `AI đang bận hoặc mạng chập chờn, tự thử lại bước này (lần ${n}/${MAX_STEP_RETRIES})... ${progress}`
           )
         );
       }
@@ -140,8 +134,8 @@ export function TeacherUploadPage() {
       <div>
         <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Upload tài liệu</h1>
         <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-          Dán nội dung hoặc tải lên tài liệu (PDF, DOCX, XLSX, PNG, JPG). Hệ thống sẽ tự động tạo bài giảng và ngân
-          hàng câu hỏi trắc nghiệm theo cấu hình bên dưới, thay thế toàn bộ dữ liệu cũ.
+          Dán nội dung hoặc tải lên tài liệu (PDF, DOCX, XLSX, PNG, JPG). Hệ thống sẽ tự động tạo bài giảng và đề
+          trắc nghiệm theo cấu hình bên dưới, thay thế toàn bộ dữ liệu cũ.
         </p>
       </div>
 
@@ -195,107 +189,54 @@ export function TeacherUploadPage() {
 
         <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-4 space-y-3">
           <div>
-            <h2 className="font-medium text-slate-800 dark:text-slate-200">Cấu hình ngân hàng câu hỏi & đề thi</h2>
+            <h2 className="font-medium text-slate-800 dark:text-slate-200">Cấu hình đề thi</h2>
             <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-              Nếu tài liệu có nhiều chương/phần được đánh dấu rõ ràng (ví dụ "Chương 1", "Chương 2"...), nhập số
-              chương để AI sinh câu hỏi riêng theo từng chương và đề thi lấy đều số câu mỗi chương. Để "Số chương" =
-              1 nếu tài liệu không chia chương.
+              AI chọn ra các nội dung kiến thức khác nhau trong tài liệu và soạn mỗi nội dung đúng 1 câu, chia đều 4 mức
+              độ: Nhận biết, Thông hiểu, Vận dụng, Vận dụng cao. Mỗi lượt làm bài có đủ tất cả các câu, nhưng thứ tự
+              câu và thứ tự đáp án được đảo ngẫu nhiên.
             </p>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Số chương</label>
+              <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Số câu hỏi</label>
               <input
                 type="number"
-                min={1}
-                max={20}
-                value={numChapters}
-                onChange={(e) => setNumChapters(Math.max(1, Number(e.target.value) || 1))}
-                className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">
-                Tổng số câu hỏi ngân hàng
-              </label>
-              <input
-                type="number"
-                min={numChapters}
-                max={500}
-                value={totalBankQuestions}
-                onChange={(e) => setTotalBankQuestions(Math.max(1, Number(e.target.value) || 1))}
-                className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">
-                Số câu {numChapters > 1 ? "mỗi chương " : ""}trong đề thi
-              </label>
-              <input
-                type="number"
-                min={1}
+                min={4}
                 max={100}
-                value={questionsPerChapterInExam}
-                disabled={fixedExam}
-                onChange={(e) => setQuestionsPerChapterInExam(Math.max(1, Number(e.target.value) || 1))}
-                className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500 disabled:opacity-50"
+                value={totalQuestions}
+                onChange={(e) => setTotalQuestions(Math.min(100, Math.max(1, Number(e.target.value) || 1)))}
+                className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
               />
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{levelSummary(totalQuestions)}</p>
+            </div>
+            <div>
+              <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">
+                Giới hạn thời gian làm bài (phút)
+              </label>
+              <input
+                type="number"
+                min={0}
+                max={600}
+                value={timeLimitMinutes}
+                onChange={(e) => setTimeLimitMinutes(Math.max(0, Number(e.target.value) || 0))}
+                className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+              />
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                Tính từ lúc sinh viên bấm "Bắt đầu làm bài"; hết giờ hệ thống tự động nộp bài. Nhập 0 nếu không giới
+                hạn.
+              </p>
             </div>
           </div>
 
-          <p className="text-sm text-slate-500 dark:text-slate-400">
-            {fixedExam ? (
-              <>
-                Đề thi cố định: <strong>{totalBankQuestions}</strong> câu ({numChapters} chương × ~
-                {Math.ceil(totalBankQuestions / numChapters)} câu/chương) — dùng toàn bộ ngân hàng, mọi lượt làm
-                bài đều giống nhau.
-              </>
-            ) : (
-              <>
-                Tổng số câu trong 1 đề thi (random): <strong>{numChapters * questionsPerChapterInExam}</strong> câu
-                ({numChapters} chương × {questionsPerChapterInExam} câu/chương)
-              </>
-            )}
-          </p>
-
-          <div className="flex flex-col sm:flex-row gap-3 pt-1">
-            <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
-              <input
-                type="checkbox"
-                checked={fixedExam}
-                onChange={(e) => setFixedExam(e.target.checked)}
-                className="h-4 w-4 rounded border-slate-300 dark:border-slate-700"
-              />
-              Đề thi cố định (không random, dùng toàn bộ ngân hàng, giống nhau mỗi lượt làm)
-            </label>
-            <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
-              <input
-                type="checkbox"
-                checked={allowRetake}
-                onChange={(e) => setAllowRetake(e.target.checked)}
-                className="h-4 w-4 rounded border-slate-300 dark:border-slate-700"
-              />
-              Cho phép sinh viên làm bài nhiều lần
-            </label>
-          </div>
-
-          <div className="max-w-xs">
-            <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">
-              Giới hạn thời gian làm bài (phút)
-            </label>
+          <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
             <input
-              type="number"
-              min={0}
-              max={600}
-              value={timeLimitMinutes}
-              onChange={(e) => setTimeLimitMinutes(Math.max(0, Number(e.target.value) || 0))}
-              className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+              type="checkbox"
+              checked={allowRetake}
+              onChange={(e) => setAllowRetake(e.target.checked)}
+              className="h-4 w-4 rounded border-slate-300 dark:border-slate-700"
             />
-            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-              Tính từ lúc sinh viên bấm "Bắt đầu làm bài"; hết giờ hệ thống tự động nộp bài. Nhập 0 nếu không giới
-              hạn.
-            </p>
-          </div>
+            Cho phép sinh viên làm bài nhiều lần (bỏ chọn = mỗi sinh viên chỉ được làm 1 lần)
+          </label>
         </div>
 
         <button
@@ -308,6 +249,15 @@ export function TeacherUploadPage() {
       </form>
     </div>
   );
+}
+
+const LEVELS = ["Nhận biết", "Thông hiểu", "Vận dụng", "Vận dụng cao"];
+
+/** Cách chia số câu cho 4 mức độ — khớp với levelTargets() ở server (phần dư dồn cho mức thấp trước). */
+function levelSummary(total: number): string {
+  const base = Math.floor(total / LEVELS.length);
+  const remainder = total % LEVELS.length;
+  return LEVELS.map((level, i) => `${base + (i < remainder ? 1 : 0)} ${level}`).join(" · ");
 }
 
 function guessMimeType(filename: string): string {

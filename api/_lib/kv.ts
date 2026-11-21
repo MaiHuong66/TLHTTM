@@ -1,6 +1,6 @@
 import { Redis } from "@upstash/redis";
-import type { Lecture, Question } from "../../shared/types.js";
-import type { RawQuestion, UploadedFileRef } from "./gemini.js";
+import type { AnswerKey, Lecture, Question } from "../../shared/types.js";
+import type { ContentPoint, RawQuestion, UploadedFileRef } from "./gemini.js";
 
 const LECTURE_KEY = "tlhttm:lecture";
 const QUESTIONS_KEY = "tlhttm:questions";
@@ -57,6 +57,11 @@ export interface ExamConfig {
   allowRetake: boolean;
   /** 0 hoặc undefined (dữ liệu cũ) = không giới hạn thời gian. */
   timeLimitMinutes?: number;
+  /** true: mỗi lượt làm dùng TOÀN BỘ câu hỏi, chỉ đảo thứ tự câu (bỏ qua numChapters/questionsPerChapterInExam). */
+  useAllQuestions?: boolean;
+  /** true: đảo thứ tự 4 đáp án của từng câu ở mỗi lượt làm. Chỉ bật cho đề tạo theo cách mới — câu hỏi cũ có
+   * thể có phương án kiểu "Cả A và B" nên không đảo. */
+  shuffleOptions?: boolean;
 }
 
 export async function getExamConfig(): Promise<ExamConfig | null> {
@@ -87,22 +92,19 @@ export interface UploadJob {
   pastedText: string;
   extractedTexts: { name: string; text: string }[];
   uploadedFiles: UploadedFileRef[];
-  numChapters: number;
-  questionsPerChapterInExam: number;
-  fixedExam: boolean;
+  totalQuestions: number;
   allowRetake: boolean;
   timeLimitMinutes: number;
-  /** Bước còn lại: "lecture" | "extract:{chương}" | "q:{chương}:{số thứ tự lô trong chương}". */
+  /** Bước còn lại: "lecture" | "plan" | "q:{vị trí nội dung, cách nhau bằng dấu phẩy}". */
   steps: string[];
-  /** Số câu cần sinh cho mỗi bước "q:*" (khớp key với `steps`). */
-  stepBatchSizes: Record<string, number>;
   totalSteps: number;
   lecture?: Omit<Lecture, "updatedAt">;
-  /** Nội dung text đã tách riêng cho từng chương (key = số chương), dùng cho các lô câu hỏi thay vì
-   * đọc lại toàn bộ tài liệu gốc mỗi lần. */
-  chapterTexts: Record<number, string>;
-  /** Kết quả từng lô câu hỏi đã sinh, key khớp với bước trong `steps`/`stepBatchSizes`. */
-  questionBatches: Record<string, RawQuestion[]>;
+  /** Danh sách nội dung kiến thức (mỗi nội dung 1 câu), tạo ở bước "plan". */
+  plan?: ContentPoint[];
+  /** Câu hỏi đã sinh, key = vị trí nội dung trong `plan`. */
+  questionsByPoint: Record<number, RawQuestion>;
+  /** Vị trí nội dung đã được cho sinh lại 1 lần vì lần đầu AI trả về thiếu/không hợp lệ. */
+  retriedPoints: number[];
   error?: string;
 }
 
@@ -132,6 +134,9 @@ export interface QuizAttempt {
   startedAt: number;
   timeLimitSeconds: number;
   questionIds: string[];
+  /** Thứ tự đáp án đã đảo của từng câu (key = id câu): phần tử thứ i là đáp án GỐC hiển thị ở vị trí i (A, B, C, D).
+   * Không có = giữ nguyên thứ tự. */
+  optionOrders?: Record<string, AnswerKey[]>;
   submitted: boolean;
 }
 

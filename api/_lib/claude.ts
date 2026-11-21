@@ -4,7 +4,8 @@ import { withRetry } from "./retry.js";
 
 // Mặc định dùng model nhanh và rẻ nhất; đổi bằng biến môi trường CLAUDE_MODEL (vd claude-sonnet-5-5).
 const MODEL = process.env.CLAUDE_MODEL?.trim() || "claude-haiku-5-5";
-const BETAS = ["files-api-2025-04-14"];
+// structured-outputs: để `strict: true` trên tool thực sự được áp dụng (bắt buộc đủ trường, đúng tên, đúng enum).
+const BETAS = ["files-api-2025-04-14", "structured-outputs-2025-11-13"];
 
 let client: Anthropic | null = null;
 

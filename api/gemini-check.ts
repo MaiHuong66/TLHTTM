@@ -4,7 +4,7 @@ import { verifyAuthHeader } from "./_lib/auth.js";
 import { sendError } from "./_lib/http.js";
 import { claudeGenerate, toJsonSchema } from "./_lib/claude.js";
 import { QUESTIONS_PER_BATCH, generateQuestionsForPoints, planContentPoints } from "./_lib/gemini.js";
-import { getLecture } from "./_lib/kv.js";
+import { getExamConfig, getLecture, getQuestions } from "./_lib/kv.js";
 
 // Endpoint chẩn đoán (chỉ giảng viên): liệt kê model mà API key hiện tại thấy được và thử gọi nhanh
 // từng model ứng viên, để biết model nào dùng được. Không trả về API key.
@@ -24,6 +24,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     sendError(res, 401, "Bạn cần đăng nhập với vai trò giảng viên.");
     return;
   }
+  // ?bank=1: xem đề đang lưu (số câu, phân bổ mức độ, cấu hình) để chẩn đoán.
+  if (req.query.bank) {
+    const [questions, examConfig] = await Promise.all([getQuestions(), getExamConfig()]);
+    const levels: Record<string, number> = {};
+    for (const q of questions ?? []) levels[q.difficulty] = (levels[q.difficulty] ?? 0) + 1;
+    res.status(200).json({
+      count: questions?.length ?? 0,
+      levels,
+      examConfig,
+      questions: (questions ?? []).map((q) => ({ id: q.id, difficulty: q.difficulty, question: q.question })),
+    });
+    return;
+  }
+
   // ?pipeline=1: chạy thử bước lập danh sách nội dung + 1 lô câu hỏi trên bài giảng hiện có, KHÔNG lưu gì.
   if (req.query.pipeline) {
     const lecture = await getLecture();

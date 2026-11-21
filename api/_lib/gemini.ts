@@ -422,9 +422,12 @@ export async function generateQuestionsForPoints(
     `NỘI DUNG ĐƯỢC GIAO (kèm mức độ bắt buộc):\n${assigned}\n\n` +
     `Yêu cầu cho từng câu:\n` +
     `- Chỉ kiểm tra đúng nội dung được giao cho câu đó, đúng mức độ ghi trong ngoặc vuông. ${LEVEL_GUIDE}\n` +
+    `- Câu "Vận dụng" và "Vận dụng cao" BẮT BUỘC đặt trong một tình huống cụ thể (một người, một tổ chức, một sự ` +
+    `việc...) để sinh viên phải áp dụng hoặc phân tích kiến thức; không được chỉ hỏi lại định nghĩa hay đặc điểm.\n` +
     `- Không hỏi lại nội dung của câu khác, kể cả bằng cách diễn đạt khác.\n` +
-    `- Có đúng 4 phương án, chỉ 1 phương án đúng; các phương án sai phải hợp lý, cùng dạng và độ dài tương đương ` +
-    `phương án đúng.\n` +
+    `- Có đúng 4 phương án, chỉ 1 phương án đúng; các phương án sai phải hợp lý, dễ gây nhầm với người chưa nắm ` +
+    `bài, cùng dạng và độ dài tương đương phương án đúng. Phương án đúng KHÔNG được là phương án dài nhất/chi tiết ` +
+    `nhất một cách dễ nhận ra, và không chép nguyên văn câu trong tài liệu trong khi các phương án sai lại diễn đạt khác.\n` +
     `- Thứ tự các phương án sẽ bị XÁO TRỘN khi thi, nên TUYỆT ĐỐI KHÔNG dùng phương án kiểu "Tất cả các đáp án ` +
     `trên", "Cả A và B", "Không có đáp án nào đúng", và không nhắc tới chữ cái A, B, C, D trong câu hỏi hay phương án.\n` +
     `- Câu hỏi rõ ràng, không mơ hồ, viết bằng tiếng Việt.` +

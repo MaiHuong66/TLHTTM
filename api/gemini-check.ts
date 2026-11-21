@@ -38,7 +38,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     try {
       const plan = await planContentPoints(doc, total);
       const planMs = Date.now() - t0;
-      const batch = plan.slice(0, QUESTIONS_PER_BATCH).map((_, i) => i);
+      const from = Math.min(Number(req.query.from) || 0, Math.max(0, plan.length - 1));
+      const batch = plan.slice(from, from + QUESTIONS_PER_BATCH).map((_, i) => from + i);
       const questions = await generateQuestionsForPoints(doc, plan, batch);
       res.status(200).json({ planMs, batchMs: Date.now() - t0 - planMs, plan, questions });
     } catch (err) {

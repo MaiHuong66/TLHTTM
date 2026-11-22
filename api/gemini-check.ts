@@ -71,8 +71,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           .map((q) => ({ id: q.key, key: q.correctAnswer, check: checks[q.key] ?? null, question: q.question }));
         res.status(200).json({ ms: Date.now() - t0, checked: batch.length, flagged });
       } else {
-        const pairs = await findOverlaps(items);
-        res.status(200).json({ ms: Date.now() - t0, pairs });
+        const topic = typeof req.query.topic === "string" ? req.query.topic : "";
+        const raws: Record<string, unknown> = {};
+        const pairs = await findOverlaps(
+          topic ? items.filter((i) => i.topic.includes(topic)) : items,
+          (t, raw) => (raws[t] = raw)
+        );
+        res.status(200).json({ ms: Date.now() - t0, pairs, raws: topic ? raws : undefined });
       }
     } catch (err) {
       res.status(200).json({ ms: Date.now() - t0, error: err instanceof Error ? err.message.slice(0, 800) : String(err) });

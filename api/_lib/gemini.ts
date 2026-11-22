@@ -782,15 +782,21 @@ export async function verifyAnswers(doc: DocumentInput, items: AuditItem[]): Pro
 /** Kiểm định 2: tìm các cặp câu THUỘC Ô KHÁC NHAU nhưng cùng hỏi một nội dung kiến thức (dù khác mức độ hay cách
  * hỏi). Các câu cùng ô là câu dự phòng thay thế nhau (mỗi đề chỉ bốc 1) nên không xét. Rà riêng từng chủ đề con (các
  * lệnh gọi chạy song song) để AI tập trung hơn — chủ đề con được lập để không chồng lấn nhau. Trả về cặp khóa câu. */
-export async function findOverlaps(items: AuditItem[]): Promise<[string, string][]> {
+export async function findOverlaps(
+  items: AuditItem[],
+  onRaw: (topic: string, raw: unknown) => void = () => undefined
+): Promise<[string, string][]> {
   const byTopic = new Map<string, AuditItem[]>();
   for (const item of items) byTopic.set(item.topic, [...(byTopic.get(item.topic) ?? []), item]);
   const groups = [...byTopic.values()].filter((list) => new Set(list.map((i) => i.cell)).size > 1);
-  const results = await Promise.all(groups.map((list) => findOverlapsInGroup(list)));
+  const results = await Promise.all(groups.map((list) => findOverlapsInGroup(list, onRaw)));
   return results.flat();
 }
 
-async function findOverlapsInGroup(items: AuditItem[]): Promise<[string, string][]> {
+async function findOverlapsInGroup(
+  items: AuditItem[],
+  onRaw: (topic: string, raw: unknown) => void
+): Promise<[string, string][]> {
   const listing = items
     .map((item, i) => `[${i + 1}] (ô ${item.cell}, ${item.level}) ${item.question} → Đáp án: ${item.options[item.correctAnswer]}`)
     .join("\n");
@@ -844,6 +850,7 @@ async function findOverlapsInGroup(items: AuditItem[]): Promise<[string, string]
     maxOutputTokens: 4000,
   });
 
+  onRaw(items[0].topic, result.json ?? result.text);
   const pairs = ((result.json as { pairs?: { a?: unknown; b?: unknown }[] } | undefined)?.pairs ?? []) as {
     a?: unknown;
     b?: unknown;

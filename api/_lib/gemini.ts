@@ -789,8 +789,18 @@ export async function findOverlaps(
   const byTopic = new Map<string, AuditItem[]>();
   for (const item of items) byTopic.set(item.topic, [...(byTopic.get(item.topic) ?? []), item]);
   const groups = [...byTopic.values()].filter((list) => new Set(list.map((i) => i.cell)).size > 1);
-  const results = await Promise.all(groups.map((list) => findOverlapsInGroup(list, onRaw)));
-  return results.flat();
+  // Kết quả AI dao động giữa các lần gọi, nên mỗi chủ đề được rà 2 lần độc lập (thứ tự câu đảo ngược) rồi gộp: cặp nào
+  // bị 1 trong 2 lần đánh dấu đều xử lý — thà soạn lại thừa còn hơn để lọt câu hỏi trùng nội dung vào đề.
+  const results = await Promise.all(
+    groups.flatMap((list) => [findOverlapsInGroup(list, onRaw), findOverlapsInGroup([...list].reverse(), onRaw)])
+  );
+  const seen = new Set<string>();
+  return results.flat().filter(([a, b]) => {
+    const id = [a, b].sort().join("|");
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
 }
 
 async function findOverlapsInGroup(

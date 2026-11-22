@@ -736,9 +736,9 @@ export async function verifyAnswers(doc: DocumentInput, items: AuditItem[]): Pro
 
   const instruction =
     `Bạn là giám khảo thẩm định đề trắc nghiệm. Dựa HOÀN TOÀN vào tài liệu bên dưới, tự giải từng câu sau và chọn ` +
-    `phương án đúng (answer). Đánh dấu ambiguous = true nếu theo tài liệu câu có từ 2 phương án đúng trở lên, không ` +
-    `có phương án nào đúng, hoặc câu hỏi mơ hồ/thiếu dữ kiện để chọn được 1 đáp án duy nhất; ngược lại ambiguous = ` +
-    `false. Trả lời ĐỦ cả ${items.length} câu, n là số trong ngoặc vuông.\n\n${listing}`;
+    `phương án đúng nhất (answer). Chỉ đánh dấu ambiguous = true khi câu có TỪ 2 PHƯƠNG ÁN ĐỀU ĐÚNG ngang nhau, hoặc ` +
+    `KHÔNG CÓ phương án nào đúng; nếu có 1 phương án đúng rõ ràng hơn hẳn các phương án còn lại (kể cả khi tài liệu ` +
+    `không nêu nguyên văn) thì ambiguous = false. Trả lời ĐỦ cả ${items.length} câu, n là số trong ngoặc vuông.\n\n${listing}`;
 
   const result = await llm({
     instruction,

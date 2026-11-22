@@ -745,7 +745,8 @@ export async function verifyAnswers(doc: DocumentInput, items: AuditItem[]): Pro
     doc,
     model: AUDIT_MODEL,
     jsonVia: "output",
-    effort: AUDIT_EFFORT,
+    // Giải câu trắc nghiệm theo tài liệu không cần suy nghĩ sâu — mức thấp để tốn ít token.
+    effort: "low",
     // Danh sách thay vì 1 ô cố định mỗi câu: schema nhiều ô quá lớn với Claude ("compiled grammar is too large").
     // Câu AI bỏ sót không có trong kết quả và sẽ được kiểm lại ở lượt sau (xem bankAudit.applyAnswerChecks).
     schema: {
@@ -782,22 +783,14 @@ export async function verifyAnswers(doc: DocumentInput, items: AuditItem[]): Pro
 }
 
 /** Kiểm định 2: tìm các cặp câu THUỘC Ô KHÁC NHAU nhưng cùng hỏi một nội dung kiến thức (dù khác mức độ hay cách
- * hỏi). Các câu cùng ô là câu dự phòng thay thế nhau (mỗi đề chỉ bốc 1) nên không xét. Rà riêng từng chủ đề con (các
- * lệnh gọi chạy song song) để AI tập trung hơn — chủ đề con được lập để không chồng lấn nhau. Trả về cặp khóa câu. */
-export async function findOverlaps(
-  items: AuditItem[],
-  onRaw: (topic: string, raw: unknown) => void = () => undefined
-): Promise<[string, string][]> {
+ * hỏi). Các câu cùng ô là câu dự phòng thay thế nhau (mỗi đề chỉ bốc 1) nên không xét. Mỗi chủ đề con: AI xét lần lượt
+ * từng cặp câu khác ô; thêm 1 lượt rà toàn ngân hàng tìm cặp trùng giữa 2 chủ đề khác nhau. Các lệnh gọi chạy song
+ * song. Trả về cặp khóa câu. */
+export async function findOverlaps(items: AuditItem[]): Promise<[string, string][]> {
   const byTopic = new Map<string, AuditItem[]>();
   for (const item of items) byTopic.set(item.topic, [...(byTopic.get(item.topic) ?? []), item]);
   const groups = [...byTopic.values()].filter((list) => new Set(list.map((i) => i.cell)).size > 1);
-  // Kết quả AI dao động giữa các lần gọi, nên mỗi chủ đề được rà bằng 2 cách độc lập rồi gộp — AI tự liệt kê cặp trùng,
-  // và AI xét lần lượt TỪNG cặp khác ô — cặp nào bị 1 trong 2 cách đánh dấu đều xử lý: thà soạn lại thừa còn hơn để lọt
-  // câu hỏi trùng nội dung vào đề. Thêm 1 lượt rà toàn ngân hàng tìm cặp trùng giữa 2 chủ đề khác nhau. Chạy song song.
-  const results = await Promise.all([
-    ...groups.flatMap((list) => [findOverlapsInGroup(list, onRaw), judgeAllPairsInGroup(list)]),
-    findCrossTopicOverlaps(items),
-  ]);
+  const results = await Promise.all([...groups.map((list) => judgeAllPairsInGroup(list)), findCrossTopicOverlaps(items)]);
   const seen = new Set<string>();
   return results.flat().filter(([a, b]) => {
     const id = [a, b].sort().join("|");
@@ -867,8 +860,8 @@ async function findCrossTopicOverlaps(items: AuditItem[]): Promise<[string, stri
 }
 
 /** Xét LẦN LƯỢT từng cặp câu khác ô trong 1 chủ đề (AI phải trả lời có/không cho mọi cặp được liệt kê, thay vì tự nhớ
- * ra cặp nào trùng) — cách tự liệt kê ở findOverlapsInGroup vẫn bỏ sót cặp rõ ràng khi thử thật (vd câu "worm tự sao
- * chép qua mạng" với tình huống "mã độc tự gửi email cho danh bạ là loại gì"). */
+ * ra cặp nào trùng) — cách để AI tự liệt kê bỏ sót cặp rõ ràng khi thử thật (vd câu "worm tự sao chép qua mạng" với
+ * tình huống "mã độc tự gửi email cho danh bạ là loại gì"). */
 async function judgeAllPairsInGroup(items: AuditItem[]): Promise<[string, string][]> {
   const pairs: [number, number][] = [];
   for (let i = 0; i < items.length; i++) {
@@ -921,82 +914,6 @@ async function judgeAllPairsInGroup(items: AuditItem[]): Promise<[string, string
     .map((c) => [items[Number(c.a) - 1], items[Number(c.b) - 1]] as const)
     .filter(([a, b]) => a && b && a.cell !== b.cell)
     .map(([a, b]) => [a!.key, b!.key] as [string, string]);
-}
-
-async function findOverlapsInGroup(
-  items: AuditItem[],
-  onRaw: (topic: string, raw: unknown) => void
-): Promise<[string, string][]> {
-  const listing = items
-    .map((item, i) => `[${i + 1}] (ô ${item.cell}, ${item.level}) ${item.question} → Đáp án: ${item.options[item.correctAnswer]}`)
-    .join("\n");
-
-  const instruction =
-    `Bạn là giám khảo thẩm định ngân hàng câu hỏi trắc nghiệm của chủ đề "${items[0].topic}". Mỗi đề thi bốc đúng 1 câu ` +
-    `từ MỖI Ô; các câu cùng một ô là câu dự phòng thay thế nhau nên KHÔNG xét với nhau.\n` +
-    `Bước 1 (ideas): với từng câu, ghi ngắn gọn Ý KIẾN THỨC cốt lõi mà câu đó kiểm tra — tức là điều sinh viên phải ` +
-    `biết để chọn đúng đáp án (không phải bối cảnh tình huống).\n` +
-    `Bước 2 (pairs): liệt kê MỌI cặp câu thuộc HAI Ô KHÁC NHAU có ý kiến thức cốt lõi trùng hoặc chồng lấn — nếu cùng ` +
-    `xuất hiện trong một đề sẽ bị coi là hỏi trùng nội dung. Tính là TRÙNG cả khi khác mức độ và khác cách hỏi, ví dụ:\n` +
-    `- "Máy xách tay có ưu điểm gì?" và "Anh A hay đi công tác nên chọn máy nào?" (đáp án: máy xách tay vì dễ di ` +
-    `chuyển) → cùng kiểm tra ưu điểm di động của máy xách tay.\n` +
-    `- "Phần mềm nguồn mở khác phần mềm thương mại ở điểm nào?" (được sửa và phân phối lại) và "Công ty muốn sửa mã ` +
-    `nguồn rồi phân phối lại thì chọn loại phần mềm nào?" → cùng kiểm tra quyền sửa/phân phối của nguồn mở.\n` +
-    `- Câu này nêu sẵn hoặc để lộ đáp án của câu kia.\n` +
-    `KHÔNG tính là trùng nếu hai câu chỉ cùng chủ đề nhưng kiểm tra các ý kiến thức khác nhau. Ghi a, b là số trong ngoặc ` +
-    `vuông; không có cặp nào thì để danh sách rỗng.\n\n${listing}`;
-
-  const result = await llm({
-    instruction,
-    model: AUDIT_MODEL,
-    jsonVia: "output",
-    effort: AUDIT_EFFORT,
-    schema: {
-      type: Type.OBJECT,
-      properties: {
-        ideas: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: { n: { type: Type.INTEGER }, idea: { type: Type.STRING } },
-            required: ["n", "idea"],
-          },
-        },
-        pairs: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              a: { type: Type.INTEGER },
-              b: { type: Type.INTEGER },
-              reason: { type: Type.STRING, description: "Ý kiến thức bị hỏi trùng" },
-            },
-            required: ["a", "b", "reason"],
-          },
-        },
-      },
-      required: ["ideas", "pairs"],
-    },
-    maxOutputTokens: 4000,
-  });
-
-  onRaw(items[0].topic, result.json ?? result.text);
-  const pairs = ((result.json as { pairs?: { a?: unknown; b?: unknown }[] } | undefined)?.pairs ?? []) as {
-    a?: unknown;
-    b?: unknown;
-  }[];
-  const out: [string, string][] = [];
-  const seen = new Set<string>();
-  for (const p of Array.isArray(pairs) ? pairs : []) {
-    const a = items[Number(p?.a) - 1];
-    const b = items[Number(p?.b) - 1];
-    if (!a || !b || a.cell === b.cell) continue;
-    const id = [a.key, b.key].sort().join("|");
-    if (seen.has(id)) continue;
-    seen.add(id);
-    out.push([a.key, b.key]);
-  }
-  return out;
 }
 
 

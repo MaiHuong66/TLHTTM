@@ -78,11 +78,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         res.status(200).json({ ms: Date.now() - t0, checked: batch.length, flagged });
       } else {
         const topic = typeof req.query.topic === "string" ? req.query.topic : "";
-        const raws: Record<string, unknown> = {};
-        const pairs = await findOverlaps(
-          topic ? items.filter((i) => i.topic.includes(topic)) : items,
-          (t, raw) => (raws[t] = raw)
-        );
+        const pairs = await findOverlaps(topic ? items.filter((i) => i.topic.includes(topic)) : items);
         let saved: number | undefined;
         if (req.query.save && !topic) {
           // Rà lại đề đang dùng: lưu thêm các cặp trùng mới vào ExamConfig.conflicts để lúc bốc đề tránh.
@@ -100,7 +96,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             saved = examConfig.conflicts.length;
           }
         }
-        res.status(200).json({ ms: Date.now() - t0, pairs, saved, raws: topic ? raws : undefined });
+        res.status(200).json({ ms: Date.now() - t0, pairs, saved });
       }
     } catch (err) {
       res.status(200).json({ ms: Date.now() - t0, error: err instanceof Error ? err.message.slice(0, 800) : String(err) });

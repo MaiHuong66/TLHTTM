@@ -12,8 +12,8 @@ import type { UploadJob } from "./kv.js";
 export const MAX_CELL_RETRIES = 3;
 /** Số vòng rà trùng ý tối đa có kèm soạn lại; vòng cuối chỉ loại bớt câu dự phòng và ghi lại cặp trùng còn lại. */
 export const MAX_OVERLAP_ROUNDS = 3;
-/** Luôn rà trùng ít nhất ngần này vòng (kết quả AI dao động, vòng sau bắt được cặp vòng trước bỏ sót). */
-export const MIN_OVERLAP_ROUNDS = 2;
+/** Số vòng rà trùng tối thiểu. Vòng sau chỉ chạy khi có câu được soạn lại (câu mới phải được rà), để tiết kiệm chi phí. */
+export const MIN_OVERLAP_ROUNDS = 1;
 /** Sau các vòng thường, còn tối đa tới vòng này để soạn lại các ô bị "kẹt" (không ghép được đề đủ ô). */
 export const HARD_MAX_OVERLAP_ROUNDS = 5;
 /** Số lần soạn lại thêm cho ô bị kẹt, ngoài MAX_CELL_RETRIES. */

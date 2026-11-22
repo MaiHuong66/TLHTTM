@@ -21,6 +21,7 @@ import {
 import type { DocumentInput } from "./_lib/gemini.js";
 import {
   MAX_OVERLAP_ROUNDS,
+  MIN_OVERLAP_ROUNDS,
   VERIFY_BATCH,
   applyAnswerChecks,
   applyOverlaps,
@@ -168,6 +169,11 @@ async function handleStep(req: VercelRequest, res: VercelResponse) {
       const pairs = await findOverlaps(auditItems(job));
       const touched = applyOverlaps(job, pairs, allowRefill, (msg) => console.warn(`upload-step: job ${jobId} ${msg}`));
       if (allowRefill) scheduleRefills(job, touched);
+      // Kết quả rà trùng của AI có lúc bỏ sót, nên luôn rà ít nhất 2 vòng kể cả khi vòng đầu không phải soạn lại gì.
+      if (job.overlapRounds < MIN_OVERLAP_ROUNDS && !job.steps.slice(1).includes("overlap")) {
+        job.steps.push("overlap");
+        job.totalSteps++;
+      }
     }
   } catch (err) {
     console.error(

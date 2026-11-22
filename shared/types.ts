@@ -119,6 +119,6 @@ export interface UploadStepResponse {
     examQuestionCount?: number;
     topicCount?: number;
     /** Số câu bị loại và soạn lại ở bước kiểm định: sai đáp án / trùng ý với câu ở ô khác. */
-    audit?: { wrongAnswer: number; overlap: number; remainingConflicts: number };
+    audit?: { wrongAnswer: number; overlap: number; remainingConflicts: number; blockedCells?: number };
   };
 }

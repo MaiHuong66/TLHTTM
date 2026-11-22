@@ -19,9 +19,12 @@ import {
   verifyAnswers,
 } from "./_lib/gemini.js";
 import type { DocumentInput } from "./_lib/gemini.js";
+import { blockedCells } from "./_lib/draw.js";
 import {
+  HARD_MAX_OVERLAP_ROUNDS,
   MAX_OVERLAP_ROUNDS,
   MIN_OVERLAP_ROUNDS,
+  unblockCells,
   VERIFY_BATCH,
   applyAnswerChecks,
   applyOverlaps,
@@ -174,7 +177,12 @@ async function handleStep(req: VercelRequest, res: VercelResponse) {
         console.warn(`upload-step: job ${jobId} ${msg}`);
         if (msg.startsWith("loại câu")) (job.auditStats ??= { wrongAnswer: 0, overlap: 0 }).overlap++;
       });
-      if (allowRefill) scheduleRefills(job, touched);
+      if (allowRefill) {
+        scheduleRefills(job, touched);
+      } else if (job.overlapRounds < HARD_MAX_OVERLAP_ROUNDS) {
+        // Hết vòng thường: nếu có ô bị kẹt (không ghép được đề đủ ô mà không trùng) thì soạn lại ô đó rồi rà lại.
+        unblockCells(job, (msg) => console.warn(`upload-step: job ${jobId} ${msg}`));
+      }
       // Kết quả rà trùng của AI có lúc bỏ sót, nên luôn rà ít nhất 2 vòng kể cả khi vòng đầu không phải soạn lại gì.
       if (job.overlapRounds < MIN_OVERLAP_ROUNDS && !job.steps.slice(1).includes("overlap")) {
         job.steps.push("overlap");
@@ -253,10 +261,13 @@ async function handleStep(req: VercelRequest, res: VercelResponse) {
 
   // Ô không soạn được câu nào kể cả sau khi thử lại sẽ không có trong đề (đề ít câu hơn tương ứng).
   const matrixCells = job.matrix!.cells.map((c) => c.id).filter((id) => questions.some((q) => q.cell === id));
+  // Số câu mỗi đề chắc chắn có được khi tránh mọi cặp trùng (ô bị kẹt sẽ bị bỏ khỏi đề).
+  const blocked = blockedCells(questions, matrixCells, conflicts);
   const audit = {
     wrongAnswer: job.auditStats?.wrongAnswer ?? 0,
     overlap: job.auditStats?.overlap ?? 0,
     remainingConflicts: conflicts.length,
+    blockedCells: blocked.length,
   };
 
   if (job.dryRun) {
@@ -270,7 +281,7 @@ async function handleStep(req: VercelRequest, res: VercelResponse) {
         title: job.lecture.title,
         sectionsCount: job.lecture.sections.length,
         questionCount: questions.length,
-        examQuestionCount: matrixCells.length,
+        examQuestionCount: matrixCells.length - blocked.length,
         topicCount: job.matrix!.topics.length,
         audit,
       },
@@ -319,7 +330,7 @@ async function handleStep(req: VercelRequest, res: VercelResponse) {
       title: job.lecture.title,
       sectionsCount: job.lecture.sections.length,
       questionCount: questions.length,
-      examQuestionCount: matrixCells.length,
+      examQuestionCount: matrixCells.length - blocked.length,
       topicCount: job.matrix.topics.length,
       audit,
     },

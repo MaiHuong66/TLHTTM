@@ -1,4 +1,5 @@
 import { cellsPerBatch } from "./gemini.js";
+import { blockedCells } from "./draw.js";
 import type { AuditItem, RawQuestion } from "./gemini.js";
 import type { UploadJob } from "./kv.js";
 
@@ -13,6 +14,10 @@ export const MAX_CELL_RETRIES = 3;
 export const MAX_OVERLAP_ROUNDS = 3;
 /** Luôn rà trùng ít nhất ngần này vòng (kết quả AI dao động, vòng sau bắt được cặp vòng trước bỏ sót). */
 export const MIN_OVERLAP_ROUNDS = 2;
+/** Sau các vòng thường, còn tối đa tới vòng này để soạn lại các ô bị "kẹt" (không ghép được đề đủ ô). */
+export const HARD_MAX_OVERLAP_ROUNDS = 5;
+/** Số lần soạn lại thêm cho ô bị kẹt, ngoài MAX_CELL_RETRIES. */
+const EXTRA_UNBLOCK_RETRIES = 2;
 /** Số câu kiểm tra đáp án trong 1 bước (1 lần gọi AI). */
 export const VERIFY_BATCH = 20;
 /** Câu mà AI bỏ sót khi kiểm đáp án được gửi kiểm lại tối đa ngần này lần, sau đó giữ nguyên. */
@@ -89,13 +94,13 @@ export function queueWork(job: UploadJob, newSteps: string[]): void {
 }
 
 /** Cho soạn lại các ô (trong `onlyCells` nếu có) còn thiếu câu dự phòng và chưa hết lượt soạn lại. */
-export function scheduleRefills(job: UploadJob, onlyCells?: string[]): string[] {
+export function scheduleRefills(job: UploadJob, onlyCells?: string[], maxRetries = MAX_CELL_RETRIES): string[] {
   const cells = job.matrix?.cells ?? [];
   const need = cells.filter(
     (c) =>
       (!onlyCells || onlyCells.includes(c.id)) &&
       (job.questionsByCell[c.id]?.length ?? 0) < job.variantsPerCell &&
-      (job.cellRetries[c.id] ?? 0) < MAX_CELL_RETRIES
+      (job.cellRetries[c.id] ?? 0) < maxRetries
   );
   if (need.length === 0) return [];
   for (const c of need) job.cellRetries[c.id] = (job.cellRetries[c.id] ?? 0) + 1;
@@ -223,4 +228,35 @@ export function applyOverlaps(
     }
   }
   return [...touched];
+}
+
+/**
+ * Sau khi đã ghi lại các cặp trùng: nếu không thể bốc đề đủ mọi ô mà không dính cặp trùng (vd mọi câu dự phòng của 1 ô
+ * đều trùng ý với mọi câu của 1 ô khác — 2 ô vốn hỏi cùng một ý), thì loại các câu dính cặp trùng của ô bị kẹt và cho
+ * soạn lại ô đó, tránh ý của các câu đối diện. Trả về các ô được cho soạn lại.
+ */
+export function unblockCells(job: UploadJob, log: (msg: string) => void = () => undefined): string[] {
+  if (!job.matrix) return [];
+  const items = auditItems(job).map((i) => ({ id: i.key, cell: i.cell }));
+  const blocked = blockedCells(items, job.matrix.cells.map((c) => c.id), job.conflicts);
+  if (blocked.length === 0) return [];
+
+  const textOf = new Map(auditItems(job).map((i) => [i.key, i.question]));
+  const refill: string[] = [];
+  for (const cell of blocked) {
+    if ((job.cellRetries[cell] ?? 0) >= MAX_CELL_RETRIES + EXTRA_UNBLOCK_RETRIES) continue;
+    const keys = (job.questionsByCell[cell] ?? []).map((q) => q.key ?? "");
+    const conflicted = keys.filter((k) => job.conflicts.some(([a, b]) => a === k || b === k));
+    for (const key of conflicted) {
+      for (const [a, b] of job.conflicts) {
+        const partner = a === key ? b : b === key ? a : null;
+        if (partner) addAvoid(job, cell, textOf.get(partner) ?? "");
+      }
+      removeQuestion(job, key);
+    }
+    job.conflicts = job.conflicts.filter(([a, b]) => !conflicted.includes(a) && !conflicted.includes(b));
+    log(`ô ${cell} bị kẹt (mọi câu đều trùng ý với ô khác): loại ${conflicted.length} câu, soạn lại với trọng tâm khác`);
+    refill.push(cell);
+  }
+  return scheduleRefills(job, refill, MAX_CELL_RETRIES + EXTRA_UNBLOCK_RETRIES);
 }

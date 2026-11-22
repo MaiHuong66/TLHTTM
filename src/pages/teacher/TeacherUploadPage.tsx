@@ -131,6 +131,12 @@ export function TeacherUploadPage() {
       showToast(
         `Đã tạo bài giảng "${step.result?.title}", ngân hàng ${step.result?.questionCount} câu theo ` +
           `${step.result?.topicCount ?? "?"} chủ đề con; mỗi đề ${step.result?.examQuestionCount ?? "?"} câu. ` +
+          (step.result?.audit
+            ? `Kiểm định: loại ${step.result.audit.wrongAnswer} câu sai đáp án, ${step.result.audit.overlap} câu trùng ý` +
+              (step.result.audit.blockedCells
+                ? `; còn ${step.result.audit.blockedCells} ô không ghép được do trùng nội dung nên đề ít câu hơn cấu hình. `
+                : ". ")
+            : "") +
           `Website sẽ tự động cập nhật cho sinh viên.`,
         "success"
       );

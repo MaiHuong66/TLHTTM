@@ -5,7 +5,7 @@ import { sendError } from "./_lib/http.js";
 import { claudeGenerate, toJsonSchema } from "./_lib/claude.js";
 import { DEFAULT_LEVEL_COUNTS, cellsPerBatch, findOverlaps, generateCellQuestions, planMatrix, verifyAnswers } from "./_lib/gemini.js";
 import type { AuditItem } from "./_lib/gemini.js";
-import { getExamConfig, getLecture, getQuestions, setExamConfig } from "./_lib/kv.js";
+import { getExamConfig, getLecture, getQuestions, setExamConfig, setQuestions } from "./_lib/kv.js";
 
 // Endpoint chẩn đoán (chỉ giảng viên): liệt kê model mà API key hiện tại thấy được và thử gọi nhanh
 // từng model ứng viên, để biết model nào dùng được. Không trả về API key.
@@ -28,6 +28,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // ?version=1: commit đang chạy trên Vercel (để biết bản mới đã deploy xong chưa).
   if (req.query.version) {
     res.status(200).json({ commit: process.env.VERCEL_GIT_COMMIT_SHA ?? null });
+    return;
+  }
+
+  // ?removeQuestion=q75: xóa 1 câu sai khỏi ngân hàng đang dùng (KHÔNG gọi AI). Chỉ xóa khi ô của câu còn câu dự phòng
+  // khác, để mỗi đề vẫn đủ số câu.
+  if (typeof req.query.removeQuestion === "string") {
+    const id = req.query.removeQuestion.trim();
+    const [questions, examConfig] = await Promise.all([getQuestions(), getExamConfig()]);
+    const target = questions?.find((q) => q.id === id);
+    if (!questions || !target) {
+      sendError(res, 404, `Không có câu ${id} trong ngân hàng.`);
+      return;
+    }
+    const sameCell = questions.filter((q) => q.cell && q.cell === target.cell && q.id !== id);
+    if (target.cell && sameCell.length === 0) {
+      sendError(res, 409, `Câu ${id} là câu cuối cùng của ô ${target.cell}, xóa sẽ làm đề thiếu câu.`);
+      return;
+    }
+    await setQuestions(questions.filter((q) => q.id !== id));
+    if (examConfig?.conflicts) {
+      examConfig.conflicts = examConfig.conflicts.filter(([a, b]) => a !== id && b !== id);
+      await setExamConfig(examConfig);
+    }
+    res.status(200).json({ removed: id, cell: target.cell, remainingInCell: sameCell.map((q) => q.id) });
     return;
   }
 

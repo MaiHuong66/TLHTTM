@@ -530,7 +530,9 @@ export async function generateCellQuestions(
     `việc...) để sinh viên phải áp dụng hoặc phân tích kiến thức; không được chỉ hỏi lại định nghĩa hay đặc điểm.\n` +
     `- Câu của một ô không được hỏi vào trọng tâm của ô khác.\n` +
     `- Có đúng 4 phương án, chỉ 1 phương án đúng; các phương án sai phải hợp lý, dễ gây nhầm với người chưa nắm ` +
-    `bài, cùng dạng và độ dài tương đương phương án đúng. Phương án đúng KHÔNG được là phương án dài nhất/chi tiết ` +
+    `bài, cùng dạng và độ dài tương đương phương án đúng. Phương án sai phải CÙNG LOẠI với phương án đúng (cùng là ` +
+    `loại máy tính, cùng là loại mạng, cùng là một biện pháp...) và lấy từ kiến thức trong tài liệu; không dùng phương ` +
+    `án lạc đề, vô lý hay hiển nhiên sai mà ai cũng loại được. Phương án đúng KHÔNG được là phương án dài nhất/chi tiết ` +
     `nhất một cách dễ nhận ra, và không chép nguyên văn câu trong tài liệu trong khi các phương án sai lại diễn đạt khác.\n` +
     `- Vị trí phương án đúng (A, B, C, D) phân bố đa dạng.\n` +
     `- Thứ tự các phương án sẽ bị XÁO TRỘN khi thi, nên TUYỆT ĐỐI KHÔNG dùng phương án kiểu "Tất cả các đáp án ` +

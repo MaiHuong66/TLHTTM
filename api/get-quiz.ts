@@ -71,50 +71,73 @@ function pickBalancedByDifficulty(pool: Question[], total: number): Question[] {
 
 /**
  * Đề theo ma trận: mỗi ô (chủ đề con × mức độ) bốc ngẫu nhiên đúng 1 trong các câu dự phòng của ô — tỉ lệ mức độ luôn
- * cố định, mỗi lượt khác nhau — và không bao giờ bốc 2 câu nằm trong 1 cặp trùng ý (`conflicts`). Tìm tổ hợp hợp lệ
- * bằng thử-quay-lui ngẫu nhiên; nếu không có tổ hợp nào đủ mọi ô (không xảy ra khi kiểm định đã loại được trùng ý) thì
- * bỏ ô không bốc được, vì đề không được có câu trùng nội dung.
+ * cố định, mỗi lượt khác nhau — và không bao giờ bốc 2 câu nằm trong 1 cặp trùng ý (`conflicts`).
+ *
+ * Cách tìm: (1) loại trước các câu không thể dùng — câu trùng ý với MỌI câu còn lại của một ô khác (bốc nó thì ô kia
+ * không còn câu nào); lặp tới khi không loại thêm được. (2) Thử-quay-lui ngẫu nhiên, mỗi bước bốc ô còn ít lựa chọn
+ * nhất và chỉ nhận câu mà mọi ô chưa bốc vẫn còn câu hợp lệ. Nếu thật sự không có tổ hợp đủ mọi ô thì bỏ ô không bốc
+ * được, vì đề không được có câu trùng nội dung.
  */
 export function drawFromMatrix(
   questions: Question[],
   matrixCells: string[],
   conflicts: [string, string][]
 ): Question[] {
-  const byCell = new Map<string, Question[]>();
-  for (const q of questions) {
-    if (!q.cell) continue;
-    byCell.set(q.cell, [...(byCell.get(q.cell) ?? []), q]);
-  }
   const conflictsOf = new Map<string, Set<string>>();
   for (const [a, b] of conflicts) {
     conflictsOf.set(a, (conflictsOf.get(a) ?? new Set()).add(b));
     conflictsOf.set(b, (conflictsOf.get(b) ?? new Set()).add(a));
   }
-  const cells = shuffle(matrixCells.filter((c) => (byCell.get(c) ?? []).length > 0));
-  const chosen: Question[] = [];
-  const fits = (q: Question) => !chosen.some((c) => conflictsOf.get(q.id)?.has(c.id));
+  const clash = (a: Question, b: Question) => conflictsOf.get(a.id)?.has(b.id) ?? false;
 
-  let budget = 20000;
-  const search = (i: number): boolean => {
-    if (i === cells.length) return true;
-    for (const q of shuffle(byCell.get(cells[i])!)) {
+  const pools = new Map<string, Question[]>();
+  for (const cell of matrixCells) {
+    const pool = questions.filter((q) => q.cell === cell);
+    if (pool.length > 0) pools.set(cell, pool);
+  }
+
+  // (1) Loại câu không thể dùng.
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const [cell, pool] of pools) {
+      const usable = pool.filter((q) =>
+        [...pools].every(([other, otherPool]) => other === cell || otherPool.some((o) => !clash(q, o)))
+      );
+      if (usable.length > 0 && usable.length < pool.length) {
+        pools.set(cell, usable);
+        changed = true;
+      }
+    }
+  }
+
+  // (2) Thử-quay-lui có kiểm tra trước.
+  const chosen = new Map<string, Question>();
+  const options = (cell: string) =>
+    pools.get(cell)!.filter((q) => [...chosen.values()].every((c) => !clash(q, c)));
+  let budget = 50000;
+  const search = (): boolean => {
+    const remaining = [...pools.keys()].filter((c) => !chosen.has(c));
+    if (remaining.length === 0) return true;
+    // Ô ít lựa chọn nhất trước (hòa thì ngẫu nhiên).
+    const cell = shuffle(remaining).sort((a, b) => options(a).length - options(b).length)[0];
+    for (const q of shuffle(options(cell))) {
       if (--budget < 0) return false;
-      if (!fits(q)) continue;
-      chosen.push(q);
-      if (search(i + 1)) return true;
-      chosen.pop();
+      chosen.set(cell, q);
+      const stillPossible = remaining.every((c) => c === cell || options(c).length > 0);
+      if (stillPossible && search()) return true;
+      chosen.delete(cell);
     }
     return false;
   };
-  if (search(0)) return chosen;
+  if (search()) return [...chosen.values()];
 
   // Không có tổ hợp đủ mọi ô: chọn tham lam, bỏ ô không còn câu nào hợp lệ.
-  chosen.length = 0;
-  for (const cell of cells) {
-    const q = shuffle(byCell.get(cell)!).find(fits);
-    if (q) chosen.push(q);
+  chosen.clear();
+  for (const cell of shuffle([...pools.keys()])) {
+    const q = shuffle(options(cell))[0];
+    if (q) chosen.set(cell, q);
   }
-  return chosen;
+  return [...chosen.values()];
 }
 
 function selectQuestions(

@@ -3,7 +3,8 @@ import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import { verifyAuthHeader } from "./_lib/auth.js";
 import { sendError } from "./_lib/http.js";
 import { claudeGenerate, toJsonSchema } from "./_lib/claude.js";
-import { DEFAULT_LEVEL_COUNTS, cellsPerBatch, generateCellQuestions, planMatrix } from "./_lib/gemini.js";
+import { DEFAULT_LEVEL_COUNTS, cellsPerBatch, findOverlaps, generateCellQuestions, planMatrix, verifyAnswers } from "./_lib/gemini.js";
+import type { AuditItem } from "./_lib/gemini.js";
 import { getExamConfig, getLecture, getQuestions } from "./_lib/kv.js";
 
 // Endpoint chẩn đoán (chỉ giảng viên): liệt kê model mà API key hiện tại thấy được và thử gọi nhanh
@@ -43,6 +44,39 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         correctAnswer: q.correctAnswer,
       })),
     });
+    return;
+  }
+
+  // ?audit=overlap | ?audit=verify&from=0: chạy thử bước kiểm định trên ngân hàng đang lưu, KHÔNG sửa gì.
+  if (req.query.audit) {
+    const [questions, lecture] = await Promise.all([getQuestions(), getLecture()]);
+    const items: AuditItem[] = (questions ?? []).map((q) => ({
+      key: q.id,
+      cell: q.cell ?? q.id,
+      topic: q.topic ?? "",
+      level: q.difficulty,
+      question: q.question,
+      options: q.options,
+      correctAnswer: q.correctAnswer,
+    }));
+    const t0 = Date.now();
+    try {
+      if (req.query.audit === "verify") {
+        const from = Number(req.query.from) || 0;
+        const batch = items.slice(from, from + 30);
+        const text = (lecture?.sections ?? []).map((s) => `${s.heading}\n${s.content}\n${s.examples.join("\n")}`).join("\n\n");
+        const checks = await verifyAnswers({ pastedText: text, extractedTexts: [], uploadedFiles: [] }, batch);
+        const flagged = batch
+          .filter((q) => !checks[q.key] || checks[q.key].ambiguous || checks[q.key].answer !== q.correctAnswer)
+          .map((q) => ({ id: q.key, key: q.correctAnswer, check: checks[q.key] ?? null, question: q.question }));
+        res.status(200).json({ ms: Date.now() - t0, checked: batch.length, flagged });
+      } else {
+        const pairs = await findOverlaps(items);
+        res.status(200).json({ ms: Date.now() - t0, pairs });
+      }
+    } catch (err) {
+      res.status(200).json({ ms: Date.now() - t0, error: err instanceof Error ? err.message.slice(0, 800) : String(err) });
+    }
     return;
   }
 

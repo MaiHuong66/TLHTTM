@@ -46,6 +46,8 @@ export interface ClaudeRequest {
   /** Mặc định true: Claude bắt buộc trả đúng schema. Tắt cho schema quá lớn (Claude báo "compiled grammar is too
    * large") — khi đó nơi gọi phải tự kiểm tra/sửa kết quả. */
   strict?: boolean;
+  /** Model riêng cho lệnh gọi này (mặc định MODEL). */
+  model?: string;
   maxTokens: number;
 }
 
@@ -150,7 +152,7 @@ export async function claudeGenerate(req: ClaudeRequest): Promise<ClaudeResult> 
 
   const response = await withRetry(() =>
     ai.beta.messages.create({
-      model: MODEL,
+      model: req.model || MODEL,
       max_tokens: req.maxTokens,
       system: req.system,
       messages: req.messages.map((m) => ({ role: m.role, content: toBlocks(m.parts) })),

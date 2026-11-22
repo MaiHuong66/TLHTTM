@@ -38,6 +38,8 @@ interface LlmCall {
   schema?: unknown;
   /** Chỉ áp dụng cho Claude, xem ClaudeRequest.strict. */
   strict?: boolean;
+  /** Chỉ áp dụng cho Claude: model riêng cho lệnh gọi này. */
+  model?: string;
   maxOutputTokens?: number;
 }
 
@@ -87,6 +89,7 @@ async function llm(call: LlmCall): Promise<LlmResult> {
       messages,
       schema: call.schema ? toJsonSchema(call.schema) : undefined,
       strict: call.strict,
+      model: call.model,
       maxTokens: call.maxOutputTokens ?? 8192,
     });
     if (call.schema && (result.truncated || result.json === undefined)) {
@@ -417,8 +420,10 @@ export async function planMatrix(doc: DocumentInput, levelCounts: number[]): Pro
     `chủ đề phải có đúng: ${quota}. Mỗi chủ đề có TỐI ĐA 1 ô cho mỗi mức độ và có khoảng ${Number.isInteger(perTopic) ? perTopic : `${Math.floor(perTopic)}-${Math.ceil(perTopic)}`} ô. ` +
     `Chọn mức độ phù hợp với nội dung của chủ đề (chủ đề có quy trình, quy tắc, tình huống thực tế thì hợp với ` +
     `"Vận dụng"/"Vận dụng cao"). ${LEVEL_GUIDE}\n` +
-    `3) Với mỗi ô, ghi "focus" là nội dung trọng tâm CỤ THỂ sẽ hỏi. Các ô trong cùng một chủ đề phải có trọng tâm ` +
-    `KHÁC NHAU, không trùng, không bao hàm nhau, để đề không hỏi lặp một nội dung.\n` +
+    `3) Với mỗi ô, ghi "focus" là nội dung trọng tâm CỤ THỂ sẽ hỏi. Các ô trong cùng một chủ đề phải hỏi về các Ý ` +
+    `KIẾN THỨC KHÁC NHAU (khái niệm, đặc điểm, quy tắc, sự kiện khác nhau), không trùng, không bao hàm nhau. KHÔNG được ` +
+    `để ô mức cao chỉ là áp dụng lại đúng ý của ô mức thấp hơn: ví dụ ô "Thông hiểu: đặc điểm của máy xách tay" và ô ` +
+    `"Vận dụng: chọn máy xách tay cho một tình huống" là HỎI TRÙNG vì cùng kiểm tra đặc điểm máy xách tay.\n` +
     `Chỉ dùng nội dung có trong tài liệu. Viết bằng tiếng Việt.`;
 
   type RawTopic = { name: string; description: string; cells: { level: string; focus: string }[] };
@@ -528,6 +533,10 @@ export interface RawQuestion {
   optionD: string;
   correctAnswer: AnswerKey;
   difficulty: Difficulty;
+  /** Khóa tạm trong lúc soạn ngân hàng (vd "3-2#17"), để các bước kiểm định tham chiếu. */
+  key?: string;
+  /** Đã qua bước tự giải lại đáp án. */
+  verified?: boolean;
 }
 
 const ANSWER_KEYS: AnswerKey[] = ["A", "B", "C", "D"];
@@ -539,7 +548,9 @@ export async function generateCellQuestions(
   matrix: QuestionMatrix,
   cellIds: string[],
   variants: number,
-  onReject: (reason: string, item: unknown) => void = () => undefined
+  onReject: (reason: string, item: unknown) => void = () => undefined,
+  /** Câu đã có (ở ô khác cùng chủ đề, hoặc từng bị đánh dấu trùng) mà câu mới của ô KHÔNG được hỏi lại ý. */
+  avoidByCell: Record<string, string[]> = {}
 ): Promise<Record<string, RawQuestion[]>> {
   const cells = cellIds
     .map((id) => matrix.cells.find((c) => c.id === id))
@@ -557,6 +568,11 @@ export async function generateCellQuestions(
         ? `trọng tâm: ${c.focus}.`
         : `trọng tâm: tự chọn 1 nội dung cụ thể của chủ đề này phù hợp mức độ.`) +
       (siblings.length ? ` Không hỏi vào các trọng tâm thuộc ô khác của chủ đề: ${siblings.join("; ")}.` : "") +
+      (avoidByCell[c.id]?.length
+        ? ` KHÔNG được hỏi lại ý kiến thức của các câu đã có sau (kể cả ở mức độ hay tình huống khác): ` +
+          avoidByCell[c.id].map((q) => `"${q}"`).join("; ") +
+          "."
+        : "") +
       ` Ghi vào ${Array.from({ length: variants }, (_, v) => slotName(k - 1, v)).join(", ")}.`
     );
   };
@@ -643,18 +659,25 @@ export function mergeCellQuestions(existing: RawQuestion[], added: RawQuestion[]
   return merged;
 }
 
-/** Tạo ngân hàng câu hỏi theo thứ tự ô của ma trận; mỗi câu mang nhãn mức độ, chủ đề con và ô. */
-export function finalizeQuestions(matrix: QuestionMatrix, byCell: Record<string, RawQuestion[]>): Question[] {
+/** Tạo ngân hàng câu hỏi theo thứ tự ô của ma trận; mỗi câu mang nhãn mức độ, chủ đề con và ô. `idByKey` ánh xạ
+ * khóa tạm của câu (RawQuestion.key) sang id câu trong ngân hàng. */
+export function finalizeQuestions(
+  matrix: QuestionMatrix,
+  byCell: Record<string, RawQuestion[]>
+): { questions: Question[]; idByKey: Record<string, string> } {
   const seen = new Set<string>();
   const questions: Question[] = [];
+  const idByKey: Record<string, string> = {};
 
   for (const cell of matrix.cells) {
     for (const raw of byCell[cell.id] ?? []) {
       const key = normalizeText(raw.question);
       if (seen.has(key)) continue;
       seen.add(key);
+      const id = `q${questions.length + 1}`;
+      if (raw.key) idByKey[raw.key] = id;
       questions.push({
-        id: `q${questions.length + 1}`,
+        id,
         question: raw.question,
         options: { A: raw.optionA, B: raw.optionB, C: raw.optionC, D: raw.optionD },
         correctAnswer: raw.correctAnswer,
@@ -669,8 +692,153 @@ export function finalizeQuestions(matrix: QuestionMatrix, byCell: Record<string,
   if (questions.length === 0) {
     throw new Error("Không sinh được câu hỏi nào từ tài liệu.");
   }
-  return questions;
+  return { questions, idByKey };
 }
+
+/** Model dùng cho các bước kiểm định (giải lại câu hỏi, rà trùng ý) — cần phán đoán chính xác hơn bước soạn câu nên
+ * mặc định dùng model mạnh hơn; đổi bằng biến môi trường CLAUDE_AUDIT_MODEL. Chỉ áp dụng khi dùng Claude. */
+const AUDIT_MODEL = process.env.CLAUDE_AUDIT_MODEL?.trim() || "claude-sonnet-5-5";
+
+/** 1 câu trong ngân hàng đang soạn, kèm khóa tạm `key` để các bước kiểm định tham chiếu. */
+export interface AuditItem {
+  key: string;
+  cell: string;
+  topic: string;
+  level: Difficulty;
+  question: string;
+  options: Record<AnswerKey, string>;
+  correctAnswer: AnswerKey;
+}
+
+export interface AnswerCheck {
+  /** Phương án AI chọn khi tự giải (không xem đáp án). */
+  answer?: AnswerKey;
+  /** Câu có hơn 1 phương án đúng, không có phương án nào đúng, hoặc mơ hồ theo tài liệu. */
+  ambiguous: boolean;
+}
+
+/** Kiểm định 1: AI tự giải lại từng câu dựa trên tài liệu, KHÔNG được biết đáp án, và báo câu mơ hồ. Câu giải ra khác
+ * đáp án đã gắn hoặc mơ hồ sẽ bị loại ở nơi gọi. Câu AI không trả lời thì không có trong kết quả. */
+export async function verifyAnswers(doc: DocumentInput, items: AuditItem[]): Promise<Record<string, AnswerCheck>> {
+  if (items.length === 0) return {};
+  const slots = items.map((_, i) => `cau_${i + 1}`);
+  const listing = items
+    .map(
+      (q, i) =>
+        `cau_${i + 1}: ${q.question}\n` + ANSWER_KEYS.map((k) => `   ${k}. ${q.options[k]}`).join("\n")
+    )
+    .join("\n");
+
+  const instruction =
+    `Bạn là giám khảo thẩm định đề trắc nghiệm. Dựa HOÀN TOÀN vào tài liệu bên dưới, tự giải từng câu sau và chọn ` +
+    `phương án đúng (answer). Đánh dấu ambiguous = true nếu theo tài liệu câu có từ 2 phương án đúng trở lên, không ` +
+    `có phương án nào đúng, hoặc câu hỏi mơ hồ/thiếu dữ kiện để chọn được 1 đáp án duy nhất; ngược lại ambiguous = ` +
+    `false.\n\n${listing}`;
+
+  const result = await llm({
+    instruction,
+    doc,
+    model: AUDIT_MODEL,
+    strict: false,
+    schema: {
+      type: Type.OBJECT,
+      properties: Object.fromEntries(
+        slots.map((s) => [
+          s,
+          {
+            type: Type.OBJECT,
+            properties: {
+              answer: { type: Type.STRING, enum: ["A", "B", "C", "D"] },
+              ambiguous: { type: Type.BOOLEAN },
+            },
+            required: ["answer", "ambiguous"],
+          },
+        ])
+      ),
+      required: slots,
+    },
+    maxOutputTokens: 4000,
+  });
+
+  const parsed = (result.json ?? {}) as Record<string, { answer?: unknown; ambiguous?: unknown } | undefined>;
+  const checks: Record<string, AnswerCheck> = {};
+  items.forEach((q, i) => {
+    const r = parsed[slots[i]];
+    if (!r) return;
+    const answer = ANSWER_KEYS.includes(r.answer as AnswerKey) ? (r.answer as AnswerKey) : undefined;
+    checks[q.key] = { answer, ambiguous: r.ambiguous === true };
+  });
+  return checks;
+}
+
+/** Kiểm định 2: tìm các cặp câu THUỘC Ô KHÁC NHAU nhưng cùng hỏi một nội dung kiến thức (dù khác mức độ hay cách
+ * hỏi). Các câu cùng ô là câu dự phòng thay thế nhau (mỗi đề chỉ bốc 1) nên không xét. Trả về cặp khóa câu. */
+export async function findOverlaps(items: AuditItem[]): Promise<[string, string][]> {
+  if (items.length < 2) return [];
+  const byTopic = new Map<string, { item: AuditItem; n: number }[]>();
+  items.forEach((item, i) => byTopic.set(item.topic, [...(byTopic.get(item.topic) ?? []), { item, n: i + 1 }]));
+  const listing = [...byTopic.entries()]
+    .map(
+      ([topic, list]) =>
+        `### Chủ đề: ${topic}\n` +
+        list
+          .map(({ item, n }) => `[${n}] (ô ${item.cell}, ${item.level}) ${item.question} → Đáp án: ${item.options[item.correctAnswer]}`)
+          .join("\n")
+    )
+    .join("\n\n");
+
+  const instruction =
+    `Bạn là giám khảo thẩm định ngân hàng câu hỏi trắc nghiệm. Mỗi đề thi bốc đúng 1 câu từ MỖI Ô; các câu cùng một ô ` +
+    `là câu dự phòng thay thế nhau nên KHÔNG xét với nhau. Hãy tìm MỌI cặp câu thuộc HAI Ô KHÁC NHAU mà nếu cùng xuất ` +
+    `hiện trong một đề sẽ bị coi là HỎI TRÙNG NỘI DUNG, tức là cùng kiểm tra một ý kiến thức: cùng một khái niệm, đặc ` +
+    `điểm, quy tắc hay sự kiện, kể cả khi khác mức độ (vd một câu hỏi đặc điểm, câu kia là tình huống áp dụng đúng đặc ` +
+    `điểm đó), khác cách diễn đạt, hoặc câu này gợi ý/để lộ đáp án câu kia. Không tính các câu chỉ cùng chủ đề rộng ` +
+    `nhưng hỏi các ý khác nhau. Ghi a, b là số trong ngoặc vuông của 2 câu; nếu không có cặp nào thì trả về danh sách ` +
+    `rỗng.\n\n${listing}`;
+
+  const result = await llm({
+    instruction,
+    model: AUDIT_MODEL,
+    strict: false,
+    schema: {
+      type: Type.OBJECT,
+      properties: {
+        pairs: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              a: { type: Type.INTEGER },
+              b: { type: Type.INTEGER },
+              reason: { type: Type.STRING, description: "Ý kiến thức bị hỏi trùng" },
+            },
+            required: ["a", "b", "reason"],
+          },
+        },
+      },
+      required: ["pairs"],
+    },
+    maxOutputTokens: 4000,
+  });
+
+  const pairs = ((result.json as { pairs?: { a?: unknown; b?: unknown }[] } | undefined)?.pairs ?? []) as {
+    a?: unknown;
+    b?: unknown;
+  }[];
+  const out: [string, string][] = [];
+  const seen = new Set<string>();
+  for (const p of Array.isArray(pairs) ? pairs : []) {
+    const a = items[Number(p?.a) - 1];
+    const b = items[Number(p?.b) - 1];
+    if (!a || !b || a.cell === b.cell) continue;
+    const id = [a.key, b.key].sort().join("|");
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push([a.key, b.key]);
+  }
+  return out;
+}
+
 
 export async function chatAboutLecture(lecture: Lecture, history: ChatMessage[]): Promise<string> {
   const lectureText = [

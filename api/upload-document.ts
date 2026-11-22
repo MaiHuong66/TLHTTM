@@ -4,6 +4,7 @@ import { verifyAuthHeader } from "./_lib/auth.js";
 import { saveUploadJob } from "./_lib/kv.js";
 import type { UploadJob } from "./_lib/kv.js";
 import { DEFAULT_LEVEL_COUNTS, cellsPerBatch, uploadFilesToAi } from "./_lib/gemini.js";
+import { VERIFY_BATCH } from "./_lib/bankAudit.js";
 import type { DocumentInput } from "./_lib/gemini.js";
 import {
   DOCX_MIME_TYPES,
@@ -156,6 +157,11 @@ async function handleStart(req: VercelRequest, res: VercelResponse) {
     const end = Math.min(start + batch, examSize);
     questionSteps.push(`q:${Array.from({ length: end - start }, (_, i) => start + i).join(",")}`);
   }
+  // Kiểm định sau khi soạn: tự giải lại đáp án (VERIFY_BATCH câu/bước) rồi rà trùng ý trên toàn ngân hàng.
+  const auditSteps = [
+    ...Array.from({ length: Math.ceil((examSize * variantsPerCell) / VERIFY_BATCH) }, () => "verify"),
+    "overlap",
+  ];
 
   const jobId = crypto.randomUUID();
   const job: UploadJob = {
@@ -167,10 +173,14 @@ async function handleStart(req: VercelRequest, res: VercelResponse) {
     variantsPerCell,
     allowRetake,
     timeLimitMinutes,
-    steps: ["lecture", "plan", ...questionSteps],
-    totalSteps: 2 + questionSteps.length,
+    steps: ["lecture", "plan", ...questionSteps, ...auditSteps],
+    totalSteps: 2 + questionSteps.length + auditSteps.length,
     questionsByCell: {},
     cellRetries: {},
+    nextKey: 1,
+    avoidByCell: {},
+    overlapRounds: 0,
+    conflicts: [],
   };
 
   try {

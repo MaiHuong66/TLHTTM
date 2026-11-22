@@ -10,16 +10,25 @@ import {
   setQuestions,
 } from "./_lib/kv.js";
 import {
+  findOverlaps,
   finalizeQuestions,
   generateCellQuestions,
   generateLecture,
   mergeCellQuestions,
   planMatrix,
+  verifyAnswers,
 } from "./_lib/gemini.js";
-
-/** Số lần tối đa cho soạn lại 1 ô của ma trận khi AI trả về thiếu câu/câu không hợp lệ. */
-const MAX_CELL_RETRIES = 3;
 import type { DocumentInput } from "./_lib/gemini.js";
+import {
+  MAX_OVERLAP_ROUNDS,
+  VERIFY_BATCH,
+  applyAnswerChecks,
+  applyOverlaps,
+  auditItems,
+  avoidListFor,
+  keyQuestions,
+  scheduleRefills,
+} from "./_lib/bankAudit.js";
 import { isServiceUnavailableError, rateLimitRetrySeconds } from "./_lib/retry.js";
 import { buildResultsSheetName, createResultsSheet } from "./_lib/sheets.js";
 import { friendlyErrorMessage, methodNotAllowed, sendError } from "./_lib/http.js";
@@ -104,7 +113,7 @@ async function handleStep(req: VercelRequest, res: VercelResponse) {
       job.lecture = await generateLecture(doc);
     } else if (nextStep === "plan") {
       job.matrix = await planMatrix(doc, job.levelCounts);
-    } else {
+    } else if (nextStep.startsWith("q:")) {
       // Step key dạng "q:{vị trí ô},{vị trí ô},..." (vị trí trong job.matrix.cells).
       const cells = job.matrix?.cells ?? [];
       const cellIds = nextStep
@@ -115,34 +124,50 @@ async function handleStep(req: VercelRequest, res: VercelResponse) {
         .map((i) => cells[i].id);
 
       if (job.matrix && cellIds.length > 0) {
-        const generated = await generateCellQuestions(doc, job.matrix, cellIds, job.variantsPerCell, (reason, item) =>
-          console.warn(`upload-step: job ${jobId} bỏ 1 câu (${reason}):`, JSON.stringify(item).slice(0, 500))
+        const generated = await generateCellQuestions(
+          doc,
+          job.matrix,
+          cellIds,
+          job.variantsPerCell,
+          (reason, item) =>
+            console.warn(`upload-step: job ${jobId} bỏ 1 câu (${reason}):`, JSON.stringify(item).slice(0, 500)),
+          Object.fromEntries(cellIds.map((id) => [id, avoidListFor(job, id)]))
         );
         for (const id of cellIds) {
           job.questionsByCell[id] = mergeCellQuestions(
             job.questionsByCell[id] ?? [],
-            generated[id] ?? [],
+            keyQuestions(job, id, generated[id] ?? []),
             job.variantsPerCell
           );
         }
-
-        // Ô còn thiếu câu dự phòng (AI trả về thiếu/không hợp lệ): cho soạn lại (tối đa MAX_CELL_RETRIES lần) ở bước
-        // bổ sung cuối hàng đợi.
-        const retryPositions = cellIds
-          .filter(
-            (id) =>
-              (job.questionsByCell[id]?.length ?? 0) < job.variantsPerCell &&
-              (job.cellRetries[id] ?? 0) < MAX_CELL_RETRIES
-          )
-          .map((id) => {
-            job.cellRetries[id] = (job.cellRetries[id] ?? 0) + 1;
-            return cells.findIndex((c) => c.id === id);
-          });
-        if (retryPositions.length > 0) {
-          job.steps.push(`q:${retryPositions.join(",")}`);
-          job.totalSteps++;
-        }
+        // Ô còn thiếu câu dự phòng (AI trả về thiếu/không hợp lệ): cho soạn lại trước bước kiểm định.
+        scheduleRefills(job, cellIds);
       }
+    } else if (nextStep === "verify") {
+      // Tự giải lại đáp án cho 1 lô câu chưa kiểm; loại câu sai/mơ hồ rồi cho soạn lại ô bị thiếu.
+      const pending = auditItems(job)
+        .filter((item) => !job.questionsByCell[item.cell]?.find((q) => q.key === item.key)?.verified)
+        .slice(0, VERIFY_BATCH);
+      if (pending.length > 0) {
+        const results = await verifyAnswers(doc, pending);
+        const touched = applyAnswerChecks(job, pending, results, (msg) => console.warn(`upload-step: job ${jobId} ${msg}`));
+        scheduleRefills(job, touched);
+      }
+      const unverifiedLeft = auditItems(job).some(
+        (item) => !job.questionsByCell[item.cell]?.find((q) => q.key === item.key)?.verified
+      );
+      if (unverifiedLeft && !job.steps.slice(1).includes("verify")) {
+        job.steps.splice(1, 0, "verify");
+        job.totalSteps++;
+      }
+    } else if (nextStep === "overlap") {
+      // Rà trùng ý trên toàn ngân hàng: loại câu trùng với câu ở ô khác, soạn lại ô bị thiếu (kèm ý phải tránh) rồi
+      // kiểm định lại; tới vòng cuối thì chỉ loại bớt câu dự phòng và ghi lại cặp trùng còn lại để lúc bốc đề tránh.
+      job.overlapRounds++;
+      const allowRefill = job.overlapRounds < MAX_OVERLAP_ROUNDS;
+      const pairs = await findOverlaps(auditItems(job));
+      const touched = applyOverlaps(job, pairs, allowRefill, (msg) => console.warn(`upload-step: job ${jobId} ${msg}`));
+      if (allowRefill) scheduleRefills(job, touched);
     }
   } catch (err) {
     console.error(
@@ -200,9 +225,14 @@ async function handleStep(req: VercelRequest, res: VercelResponse) {
   }
 
   let questions;
+  let conflicts: [string, string][] = [];
   try {
     if (!job.matrix) throw new Error("Thiếu ma trận đề sau khi xử lý xong các bước.");
-    questions = finalizeQuestions(job.matrix, job.questionsByCell);
+    const finalized = finalizeQuestions(job.matrix, job.questionsByCell);
+    questions = finalized.questions;
+    conflicts = (job.conflicts ?? [])
+      .map(([a, b]) => [finalized.idByKey[a], finalized.idByKey[b]] as [string, string])
+      .filter(([a, b]) => a && b);
   } catch (err) {
     console.error(`upload-step: finalizeQuestions failed for job ${jobId}:`, err);
     sendError(res, 500, friendlyErrorMessage(err));
@@ -223,6 +253,7 @@ async function handleStep(req: VercelRequest, res: VercelResponse) {
       timeLimitMinutes: job.timeLimitMinutes ?? 0,
       shuffleOptions: true,
       matrixCells,
+      conflicts,
     });
   } catch (err) {
     console.error(`upload-step: failed to save final data for job ${jobId}:`, err);

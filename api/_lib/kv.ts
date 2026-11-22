@@ -64,6 +64,8 @@ export interface ExamConfig {
   shuffleOptions?: boolean;
   /** Đề theo ma trận: danh sách ô (chủ đề con × mức độ); mỗi lượt làm bốc ngẫu nhiên đúng 1 câu từ mỗi ô. */
   matrixCells?: string[];
+  /** Cặp id câu hỏi trùng ý mà bước kiểm định không loại được — không bao giờ bốc cả 2 câu vào cùng 1 đề. */
+  conflicts?: [string, string][];
 }
 
 export async function getExamConfig(): Promise<ExamConfig | null> {
@@ -99,7 +101,7 @@ export interface UploadJob {
   variantsPerCell: number;
   allowRetake: boolean;
   timeLimitMinutes: number;
-  /** Bước còn lại: "lecture" | "plan" | "q:{vị trí ô trong ma trận, cách nhau bằng dấu phẩy}". */
+  /** Bước còn lại: "lecture" | "plan" | "q:{vị trí ô trong ma trận, cách nhau bằng dấu phẩy}" | "verify" | "overlap". */
   steps: string[];
   totalSteps: number;
   lecture?: Omit<Lecture, "updatedAt">;
@@ -107,8 +109,16 @@ export interface UploadJob {
   matrix?: QuestionMatrix;
   /** Câu dự phòng đã soạn cho từng ô, key = id ô. */
   questionsByCell: Record<string, RawQuestion[]>;
-  /** Số lần đã cho soạn lại từng ô (key = id ô) vì AI trả về thiếu/không hợp lệ. */
+  /** Số lần đã cho soạn lại từng ô (key = id ô) vì thiếu câu, câu sai đáp án hoặc câu trùng ý. */
   cellRetries: Record<string, number>;
+  /** Bộ đếm để gắn khóa tạm cho câu hỏi (RawQuestion.key). */
+  nextKey: number;
+  /** Câu (nội dung) mà câu soạn lại của từng ô không được hỏi lại ý (key = id ô). */
+  avoidByCell: Record<string, string[]>;
+  /** Số vòng rà trùng ý đã chạy. */
+  overlapRounds: number;
+  /** Cặp khóa câu trùng ý không loại được (xem bankAudit.applyOverlaps). */
+  conflicts: [string, string][];
   error?: string;
 }
 

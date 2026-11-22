@@ -69,27 +69,65 @@ function pickBalancedByDifficulty(pool: Question[], total: number): Question[] {
   return shuffle(picked);
 }
 
+/**
+ * Đề theo ma trận: mỗi ô (chủ đề con × mức độ) bốc ngẫu nhiên đúng 1 trong các câu dự phòng của ô — tỉ lệ mức độ luôn
+ * cố định, mỗi lượt khác nhau — và không bao giờ bốc 2 câu nằm trong 1 cặp trùng ý (`conflicts`). Tìm tổ hợp hợp lệ
+ * bằng thử-quay-lui ngẫu nhiên; nếu không có tổ hợp nào đủ mọi ô (không xảy ra khi kiểm định đã loại được trùng ý) thì
+ * bỏ ô không bốc được, vì đề không được có câu trùng nội dung.
+ */
+export function drawFromMatrix(
+  questions: Question[],
+  matrixCells: string[],
+  conflicts: [string, string][]
+): Question[] {
+  const byCell = new Map<string, Question[]>();
+  for (const q of questions) {
+    if (!q.cell) continue;
+    byCell.set(q.cell, [...(byCell.get(q.cell) ?? []), q]);
+  }
+  const conflictsOf = new Map<string, Set<string>>();
+  for (const [a, b] of conflicts) {
+    conflictsOf.set(a, (conflictsOf.get(a) ?? new Set()).add(b));
+    conflictsOf.set(b, (conflictsOf.get(b) ?? new Set()).add(a));
+  }
+  const cells = shuffle(matrixCells.filter((c) => (byCell.get(c) ?? []).length > 0));
+  const chosen: Question[] = [];
+  const fits = (q: Question) => !chosen.some((c) => conflictsOf.get(q.id)?.has(c.id));
+
+  let budget = 20000;
+  const search = (i: number): boolean => {
+    if (i === cells.length) return true;
+    for (const q of shuffle(byCell.get(cells[i])!)) {
+      if (--budget < 0) return false;
+      if (!fits(q)) continue;
+      chosen.push(q);
+      if (search(i + 1)) return true;
+      chosen.pop();
+    }
+    return false;
+  };
+  if (search(0)) return chosen;
+
+  // Không có tổ hợp đủ mọi ô: chọn tham lam, bỏ ô không còn câu nào hợp lệ.
+  chosen.length = 0;
+  for (const cell of cells) {
+    const q = shuffle(byCell.get(cell)!).find(fits);
+    if (q) chosen.push(q);
+  }
+  return chosen;
+}
+
 function selectQuestions(
   questions: Question[],
   numChapters: number,
   questionsPerChapter: number,
   fixedExam: boolean,
   useAllQuestions: boolean,
-  matrixCells: string[] | undefined
+  matrixCells: string[] | undefined,
+  conflicts: [string, string][] | undefined
 ): Question[] {
   if (matrixCells && matrixCells.length > 0) {
-    // Đề theo ma trận: mỗi ô (chủ đề con × mức độ) bốc ngẫu nhiên đúng 1 trong các câu dự phòng của ô — tỉ lệ mức độ
-    // luôn cố định, không lặp nội dung, mỗi lượt khác nhau.
-    const byCell = new Map<string, Question[]>();
-    for (const q of questions) {
-      if (!q.cell) continue;
-      byCell.set(q.cell, [...(byCell.get(q.cell) ?? []), q]);
-    }
-    const picked = matrixCells
-      .map((cell) => byCell.get(cell) ?? [])
-      .filter((pool) => pool.length > 0)
-      .map((pool) => pool[Math.floor(Math.random() * pool.length)]);
-    return shuffle(picked);
+    return shuffle(drawFromMatrix(questions, matrixCells, conflicts ?? []));
   }
 
   if (useAllQuestions) {
@@ -207,7 +245,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       examConfig?.questionsPerChapterInExam ?? DEFAULT_QUESTIONS_PER_CHAPTER,
       examConfig?.fixedExam === true,
       examConfig?.useAllQuestions === true,
-      examConfig?.matrixCells
+      examConfig?.matrixCells,
+      examConfig?.conflicts
     );
 
     const optionOrders: Record<string, AnswerKey[]> | undefined = examConfig?.shuffleOptions

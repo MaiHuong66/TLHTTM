@@ -128,14 +128,15 @@ export function applyAnswerChecks(
       if (found.q.verifyTries >= MAX_VERIFY_TRIES) found.q.verified = true;
       continue;
     }
-    if (r.ambiguous || r.answer !== item.correctAnswer) {
-      log(
-        `loại câu ${item.key} (${r.ambiguous ? "mơ hồ" : `đáp án gắn ${item.correctAnswer}, giải ra ${r.answer ?? "?"}`}): ${item.question.slice(0, 120)}`
-      );
+    // Chỉ loại khi AI giải ra đáp án KHÁC đáp án đã gắn. Cờ "mơ hồ" của AI không đủ tin cậy (thử thật: đánh dấu mơ hồ cả
+    // những câu nó giải ra đúng đáp án và có trong tài liệu) nên chỉ ghi log, không loại.
+    if (r.answer !== item.correctAnswer) {
+      log(`loại câu ${item.key} (đáp án gắn ${item.correctAnswer}, giải ra ${r.answer ?? "?"}): ${item.question.slice(0, 120)}`);
       removeQuestion(job, item.key);
       addAvoid(job, found.cell, item.question);
       touched.add(found.cell);
     } else {
+      if (r.ambiguous) log(`câu ${item.key} được đánh dấu có thể mơ hồ (vẫn giữ): ${item.question.slice(0, 120)}`);
       found.q.verified = true;
     }
   }

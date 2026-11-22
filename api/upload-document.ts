@@ -32,6 +32,7 @@ interface UploadBody {
   files?: UploadFilePayload[];
   levelCounts?: number[];
   variantsPerCell?: number;
+  dryRun?: boolean;
   allowRetake?: boolean;
   timeLimitMinutes?: number;
 }
@@ -181,6 +182,8 @@ async function handleStart(req: VercelRequest, res: VercelResponse) {
     avoidByCell: {},
     overlapRounds: 0,
     conflicts: [],
+    auditStats: { wrongAnswer: 0, overlap: 0 },
+    dryRun: body.dryRun === true,
   };
 
   try {

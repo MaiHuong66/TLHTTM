@@ -112,5 +112,13 @@ export interface UploadStepResponse {
   completedSteps: number;
   totalSteps: number;
   error?: string;
-  result?: { title: string; sectionsCount: number; questionCount: number; examQuestionCount?: number; topicCount?: number };
+  result?: {
+    title: string;
+    sectionsCount: number;
+    questionCount: number;
+    examQuestionCount?: number;
+    topicCount?: number;
+    /** Số câu bị loại và soạn lại ở bước kiểm định: sai đáp án / trùng ý với câu ở ô khác. */
+    audit?: { wrongAnswer: number; overlap: number; remainingConflicts: number };
+  };
 }

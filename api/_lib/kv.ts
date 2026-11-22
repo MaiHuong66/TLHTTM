@@ -119,6 +119,10 @@ export interface UploadJob {
   overlapRounds: number;
   /** Cặp khóa câu trùng ý không loại được (xem bankAudit.applyOverlaps). */
   conflicts: [string, string][];
+  /** Thống kê kiểm định để báo lại cho giảng viên. */
+  auditStats?: { wrongAnswer: number; overlap: number };
+  /** Chạy thử: làm đủ mọi bước nhưng KHÔNG lưu bài giảng/đề, trả ngân hàng kết quả về để kiểm tra. */
+  dryRun?: boolean;
   error?: string;
 }
 

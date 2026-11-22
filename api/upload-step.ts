@@ -151,7 +151,10 @@ async function handleStep(req: VercelRequest, res: VercelResponse) {
         .slice(0, VERIFY_BATCH);
       if (pending.length > 0) {
         const results = await verifyAnswers(doc, pending);
-        const touched = applyAnswerChecks(job, pending, results, (msg) => console.warn(`upload-step: job ${jobId} ${msg}`));
+        const touched = applyAnswerChecks(job, pending, results, (msg) => {
+          console.warn(`upload-step: job ${jobId} ${msg}`);
+          if (msg.startsWith("loại câu")) (job.auditStats ??= { wrongAnswer: 0, overlap: 0 }).wrongAnswer++;
+        });
         scheduleRefills(job, touched);
       }
       const unverifiedLeft = auditItems(job).some(
@@ -167,7 +170,10 @@ async function handleStep(req: VercelRequest, res: VercelResponse) {
       job.overlapRounds++;
       const allowRefill = job.overlapRounds < MAX_OVERLAP_ROUNDS;
       const pairs = await findOverlaps(auditItems(job));
-      const touched = applyOverlaps(job, pairs, allowRefill, (msg) => console.warn(`upload-step: job ${jobId} ${msg}`));
+      const touched = applyOverlaps(job, pairs, allowRefill, (msg) => {
+        console.warn(`upload-step: job ${jobId} ${msg}`);
+        if (msg.startsWith("loại câu")) (job.auditStats ??= { wrongAnswer: 0, overlap: 0 }).overlap++;
+      });
       if (allowRefill) scheduleRefills(job, touched);
       // Kết quả rà trùng của AI có lúc bỏ sót, nên luôn rà ít nhất 2 vòng kể cả khi vòng đầu không phải soạn lại gì.
       if (job.overlapRounds < MIN_OVERLAP_ROUNDS && !job.steps.slice(1).includes("overlap")) {
@@ -247,6 +253,31 @@ async function handleStep(req: VercelRequest, res: VercelResponse) {
 
   // Ô không soạn được câu nào kể cả sau khi thử lại sẽ không có trong đề (đề ít câu hơn tương ứng).
   const matrixCells = job.matrix!.cells.map((c) => c.id).filter((id) => questions.some((q) => q.cell === id));
+  const audit = {
+    wrongAnswer: job.auditStats?.wrongAnswer ?? 0,
+    overlap: job.auditStats?.overlap ?? 0,
+    remainingConflicts: conflicts.length,
+  };
+
+  if (job.dryRun) {
+    // Chạy thử: không lưu gì, trả ngân hàng kết quả để kiểm tra.
+    await deleteUploadJob(jobId);
+    res.status(200).json({
+      status: "done",
+      completedSteps: job.totalSteps,
+      totalSteps: job.totalSteps,
+      result: {
+        title: job.lecture.title,
+        sectionsCount: job.lecture.sections.length,
+        questionCount: questions.length,
+        examQuestionCount: matrixCells.length,
+        topicCount: job.matrix!.topics.length,
+        audit,
+      },
+      dryRun: { matrix: job.matrix, questions, matrixCells, conflicts },
+    });
+    return;
+  }
 
   try {
     await setLecture({ ...job.lecture, updatedAt: new Date().toISOString() });
@@ -290,6 +321,7 @@ async function handleStep(req: VercelRequest, res: VercelResponse) {
       questionCount: questions.length,
       examQuestionCount: matrixCells.length,
       topicCount: job.matrix.topics.length,
+      audit,
     },
   };
   res.status(200).json(response);

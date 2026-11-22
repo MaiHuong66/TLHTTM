@@ -442,10 +442,53 @@ export async function planMatrix(doc: DocumentInput, levelCounts: number[]): Pro
   if (topics.filter(isValid).length < Math.ceil(numTopics / 2)) {
     throw new Error("AI không chia được tài liệu thành các chủ đề con. Vui lòng thử lại.");
   }
-  return repairMatrix(
+  const matrix = repairMatrix(
     topics.map((t) => ({ ...t, cells: Array.isArray(t.cells) ? t.cells : [] })),
     levelCounts
   );
+  return fillMissingFoci(doc, matrix);
+}
+
+/** Ô do repairMatrix tự thêm/chuyển chưa có trọng tâm — nếu để AI tự chọn lúc soạn câu, nó dễ chọn trùng ý với ô
+ * khác cùng chủ đề. Nên đặt trọng tâm cho các ô này ngay ở đây, bắt buộc khác các trọng tâm đã có của chủ đề. */
+async function fillMissingFoci(doc: DocumentInput, matrix: QuestionMatrix): Promise<QuestionMatrix> {
+  const missing = matrix.cells.filter((c) => !c.focus);
+  if (missing.length === 0) return matrix;
+
+  const lines = missing.map((c, i) => {
+    const topic = matrix.topics[c.topic];
+    const taken = matrix.cells.filter((o) => o.topic === c.topic && o.focus).map((o) => `"${o.focus}"`);
+    return (
+      `o_${i + 1}: chủ đề "${topic.name}"${topic.description ? ` (${topic.description})` : ""}, mức "${c.level}"` +
+      (taken.length ? `; các trọng tâm ĐÃ CÓ của chủ đề này (không được trùng/bao hàm): ${taken.join("; ")}` : "")
+    );
+  });
+  const instruction =
+    `Đọc tài liệu bên dưới. Mỗi ô sau của ma trận đề cần 1 nội dung trọng tâm CỤ THỂ để ra câu hỏi trắc nghiệm đúng ` +
+    `mức độ của ô. Trọng tâm phải thuộc chủ đề của ô, có trong tài liệu, phù hợp mức độ, và KHÁC HẲN các trọng tâm đã ` +
+    `có của cùng chủ đề (không chỉ là cùng nội dung hỏi ở mức khác) cũng như khác các ô khác trong danh sách này. ` +
+    `${LEVEL_GUIDE}\n${lines.join("\n")}\nViết bằng tiếng Việt, mỗi trọng tâm 1 câu.`;
+
+  const slots = missing.map((_, i) => `o_${i + 1}`);
+  const result = await llm({
+    instruction,
+    doc,
+    schema: {
+      type: Type.OBJECT,
+      properties: Object.fromEntries(slots.map((s) => [s, { type: Type.STRING }])),
+      required: slots,
+    },
+    maxOutputTokens: 2000,
+  });
+  const foci = (result.json ?? {}) as Record<string, unknown>;
+  return {
+    ...matrix,
+    cells: matrix.cells.map((c) => {
+      const i = missing.indexOf(c);
+      const focus = i >= 0 ? foci[slots[i]] : undefined;
+      return typeof focus === "string" && focus.trim() ? { ...c, focus: focus.trim() } : c;
+    }),
+  };
 }
 
 const questionSchema = {

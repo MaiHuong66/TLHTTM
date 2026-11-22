@@ -14,7 +14,9 @@ export const MAX_OVERLAP_ROUNDS = 3;
 /** Luôn rà trùng ít nhất ngần này vòng (kết quả AI dao động, vòng sau bắt được cặp vòng trước bỏ sót). */
 export const MIN_OVERLAP_ROUNDS = 2;
 /** Số câu kiểm tra đáp án trong 1 bước (1 lần gọi AI). */
-export const VERIFY_BATCH = 30;
+export const VERIFY_BATCH = 20;
+/** Câu mà AI bỏ sót khi kiểm đáp án được gửi kiểm lại tối đa ngần này lần, sau đó giữ nguyên. */
+export const MAX_VERIFY_TRIES = 2;
 /** Giới hạn danh sách câu cần tránh đưa vào yêu cầu soạn lại (để yêu cầu không quá dài). */
 const MAX_AVOID = 12;
 
@@ -107,7 +109,8 @@ export function scheduleRefills(job: UploadJob, onlyCells?: string[]): string[] 
 }
 
 /** Kết quả tự giải lại đáp án: giữ câu khớp đáp án; loại câu giải ra khác hoặc mơ hồ (ghi vào danh sách cần tránh
- * của ô để câu soạn lại không lặp lỗi). Câu AI không trả lời được thì vẫn giữ. Trả về các ô bị loại câu. */
+ * của ô để câu soạn lại không lặp lỗi). Câu AI bỏ sót được kiểm lại ở lượt sau (tối đa MAX_VERIFY_TRIES lần). Trả
+ * về các ô bị loại câu. */
 export function applyAnswerChecks(
   job: UploadJob,
   checked: AuditItem[],
@@ -119,7 +122,13 @@ export function applyAnswerChecks(
     const found = findQuestion(job, item.key);
     if (!found) continue;
     const r = results[item.key];
-    if (r && (r.ambiguous || r.answer !== item.correctAnswer)) {
+    if (!r) {
+      // AI bỏ sót câu này: để lượt kiểm sau gửi lại; quá MAX_VERIFY_TRIES lần thì giữ nguyên.
+      found.q.verifyTries = (found.q.verifyTries ?? 0) + 1;
+      if (found.q.verifyTries >= MAX_VERIFY_TRIES) found.q.verified = true;
+      continue;
+    }
+    if (r.ambiguous || r.answer !== item.correctAnswer) {
       log(
         `loại câu ${item.key} (${r.ambiguous ? "mơ hồ" : `đáp án gắn ${item.correctAnswer}, giải ra ${r.answer ?? "?"}`}): ${item.question.slice(0, 120)}`
       );

@@ -63,7 +63,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     try {
       if (req.query.audit === "verify") {
         const from = Number(req.query.from) || 0;
-        const batch = items.slice(from, from + 30);
+        const batch = items.slice(from, from + 20);
         const text = (lecture?.sections ?? []).map((s) => `${s.heading}\n${s.content}\n${s.examples.join("\n")}`).join("\n\n");
         const checks = await verifyAnswers({ pastedText: text, extractedTexts: [], uploadedFiles: [] }, batch);
         const flagged = batch

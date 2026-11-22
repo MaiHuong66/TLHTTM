@@ -542,6 +542,8 @@ export interface RawQuestion {
   key?: string;
   /** Đã qua bước tự giải lại đáp án. */
   verified?: boolean;
+  /** Số lần đã gửi đi kiểm đáp án mà AI không trả lời câu này. */
+  verifyTries?: number;
 }
 
 const ANSWER_KEYS: AnswerKey[] = ["A", "B", "C", "D"];
@@ -728,19 +730,15 @@ export interface AnswerCheck {
  * đáp án đã gắn hoặc mơ hồ sẽ bị loại ở nơi gọi. Câu AI không trả lời thì không có trong kết quả. */
 export async function verifyAnswers(doc: DocumentInput, items: AuditItem[]): Promise<Record<string, AnswerCheck>> {
   if (items.length === 0) return {};
-  const slots = items.map((_, i) => `cau_${i + 1}`);
   const listing = items
-    .map(
-      (q, i) =>
-        `cau_${i + 1}: ${q.question}\n` + ANSWER_KEYS.map((k) => `   ${k}. ${q.options[k]}`).join("\n")
-    )
+    .map((q, i) => `[${i + 1}] ${q.question}\n` + ANSWER_KEYS.map((k) => `   ${k}. ${q.options[k]}`).join("\n"))
     .join("\n");
 
   const instruction =
     `Bạn là giám khảo thẩm định đề trắc nghiệm. Dựa HOÀN TOÀN vào tài liệu bên dưới, tự giải từng câu sau và chọn ` +
     `phương án đúng (answer). Đánh dấu ambiguous = true nếu theo tài liệu câu có từ 2 phương án đúng trở lên, không ` +
     `có phương án nào đúng, hoặc câu hỏi mơ hồ/thiếu dữ kiện để chọn được 1 đáp án duy nhất; ngược lại ambiguous = ` +
-    `false.\n\n${listing}`;
+    `false. Trả lời ĐỦ cả ${items.length} câu, n là số trong ngoặc vuông.\n\n${listing}`;
 
   const result = await llm({
     instruction,
@@ -748,34 +746,38 @@ export async function verifyAnswers(doc: DocumentInput, items: AuditItem[]): Pro
     model: AUDIT_MODEL,
     jsonVia: "output",
     effort: AUDIT_EFFORT,
+    // Danh sách thay vì 1 ô cố định mỗi câu: schema nhiều ô quá lớn với Claude ("compiled grammar is too large").
+    // Câu AI bỏ sót không có trong kết quả và sẽ được kiểm lại ở lượt sau (xem bankAudit.applyAnswerChecks).
     schema: {
       type: Type.OBJECT,
-      properties: Object.fromEntries(
-        slots.map((s) => [
-          s,
-          {
+      properties: {
+        answers: {
+          type: Type.ARRAY,
+          items: {
             type: Type.OBJECT,
             properties: {
+              n: { type: Type.INTEGER },
               answer: { type: Type.STRING, enum: ["A", "B", "C", "D"] },
               ambiguous: { type: Type.BOOLEAN },
             },
-            required: ["answer", "ambiguous"],
+            required: ["n", "answer", "ambiguous"],
           },
-        ])
-      ),
-      required: slots,
+        },
+      },
+      required: ["answers"],
     },
     maxOutputTokens: 4000,
   });
 
-  const parsed = (result.json ?? {}) as Record<string, { answer?: unknown; ambiguous?: unknown } | undefined>;
+  const answers = (result.json as { answers?: { n?: unknown; answer?: unknown; ambiguous?: unknown }[] } | undefined)
+    ?.answers;
   const checks: Record<string, AnswerCheck> = {};
-  items.forEach((q, i) => {
-    const r = parsed[slots[i]];
-    if (!r) return;
+  for (const r of Array.isArray(answers) ? answers : []) {
+    const q = items[Number(r?.n) - 1];
+    if (!q || checks[q.key]) continue;
     const answer = ANSWER_KEYS.includes(r.answer as AnswerKey) ? (r.answer as AnswerKey) : undefined;
     checks[q.key] = { answer, ambiguous: r.ambiguous === true };
-  });
+  }
   return checks;
 }
 

@@ -146,7 +146,8 @@ export function applyAnswerChecks(
 /**
  * Xử lý các cặp câu trùng ý (thuộc 2 ô khác nhau). Lần lượt loại câu dính nhiều cặp nhất trong số các câu mà ô của nó
  * còn câu dự phòng khác. Cặp mà cả 2 câu đều là câu cuối cùng của ô: nếu còn được soạn lại thì loại 1 câu (ô đó sẽ được
- * soạn lại, tránh ý của câu kia); nếu không thì ghi vào job.conflicts để lúc bốc đề tránh. Trả về các ô bị loại câu.
+ * soạn lại, tránh ý của câu kia); nếu không thì ghi vào job.conflicts để lúc bốc đề tránh. Ở vòng cuối
+ * (`allowRefill` = false) không loại câu nào mà chỉ ghi lại mọi cặp. Trả về các ô bị loại câu.
  */
 export function applyOverlaps(
   job: UploadJob,
@@ -177,6 +178,18 @@ export function applyOverlaps(
   };
 
   let active = pairs.filter(([a, b]) => cellOf.has(a) && cellOf.has(b) && cellOf.get(a) !== cellOf.get(b));
+
+  // Vòng cuối (không còn được soạn lại): KHÔNG loại câu nào, chỉ ghi lại cặp trùng để lúc bốc đề tránh. Loại câu ở vòng
+  // này chỉ làm ô còn ít câu dự phòng — 2 ô chỉ còn 1 câu mà 2 câu đó trùng nhau thì đề nào cũng phải bỏ 1 ô.
+  if (!allowRefill) {
+    for (const [a, b] of active) {
+      const id = [a, b].sort().join("|");
+      if (!job.conflicts.some((c) => [...c].sort().join("|") === id)) job.conflicts.push([a, b]);
+      log(`ghi cặp trùng ${a} – ${b} để lúc bốc đề tránh`);
+    }
+    return [];
+  }
+
   for (let guard = 0; guard < 500; guard++) {
     active = active.filter(([a, b]) => !removed.has(a) && !removed.has(b));
     if (active.length === 0) break;

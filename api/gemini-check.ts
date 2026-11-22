@@ -25,6 +25,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     sendError(res, 401, "Bạn cần đăng nhập với vai trò giảng viên.");
     return;
   }
+  // ?version=1: commit đang chạy trên Vercel (để biết bản mới đã deploy xong chưa).
+  if (req.query.version) {
+    res.status(200).json({ commit: process.env.VERCEL_GIT_COMMIT_SHA ?? null });
+    return;
+  }
+
   // ?bank=1: xem đề đang lưu (số câu, phân bổ mức độ, cấu hình) để chẩn đoán.
   if (req.query.bank) {
     const [questions, examConfig] = await Promise.all([getQuestions(), getExamConfig()]);

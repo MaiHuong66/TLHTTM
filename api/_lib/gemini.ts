@@ -793,9 +793,11 @@ export async function findOverlaps(
   const groups = [...byTopic.values()].filter((list) => new Set(list.map((i) => i.cell)).size > 1);
   // Kết quả AI dao động giữa các lần gọi, nên mỗi chủ đề được rà 2 lần độc lập (thứ tự câu đảo ngược) rồi gộp: cặp nào
   // bị 1 trong 2 lần đánh dấu đều xử lý — thà soạn lại thừa còn hơn để lọt câu hỏi trùng nội dung vào đề.
-  const results = await Promise.all(
-    groups.flatMap((list) => [findOverlapsInGroup(list, onRaw), findOverlapsInGroup([...list].reverse(), onRaw)])
-  );
+  // Thêm 1 lượt rà toàn ngân hàng, chạy song song, chỉ tìm cặp trùng giữa 2 chủ đề khác nhau.
+  const results = await Promise.all([
+    ...groups.flatMap((list) => [findOverlapsInGroup(list, onRaw), findOverlapsInGroup([...list].reverse(), onRaw)]),
+    findCrossTopicOverlaps(items),
+  ]);
   const seen = new Set<string>();
   return results.flat().filter(([a, b]) => {
     const id = [a, b].sort().join("|");
@@ -803,6 +805,65 @@ export async function findOverlaps(
     seen.add(id);
     return true;
   });
+}
+
+/** Rà các cặp câu thuộc HAI CHỦ ĐỀ KHÁC NHAU cùng hỏi một ý (chủ đề con được lập để không chồng lấn, nhưng vẫn có thể
+ * giáp ranh — vd "phần mềm nguồn mở" và "phần mềm tự do" nằm ở 2 chủ đề). Chỉ báo cặp khác chủ đề; cặp cùng chủ đề đã
+ * có bước rà riêng từng chủ đề. */
+async function findCrossTopicOverlaps(items: AuditItem[]): Promise<[string, string][]> {
+  if (new Set(items.map((i) => i.topic)).size < 2) return [];
+  const byTopic = new Map<string, { item: AuditItem; n: number }[]>();
+  items.forEach((item, i) => byTopic.set(item.topic, [...(byTopic.get(item.topic) ?? []), { item, n: i + 1 }]));
+  const listing = [...byTopic.entries()]
+    .map(
+      ([topic, list]) =>
+        `### Chủ đề: ${topic}\n` +
+        list.map(({ item, n }) => `[${n}] ${item.question} → Đáp án: ${item.options[item.correctAnswer]}`).join("\n")
+    )
+    .join("\n\n");
+
+  const instruction =
+    `Bạn là giám khảo thẩm định ngân hàng câu hỏi trắc nghiệm. Mỗi đề thi có câu hỏi từ TẤT CẢ các chủ đề dưới đây. ` +
+    `Hãy tìm các cặp câu thuộc HAI CHỦ ĐỀ KHÁC NHAU nhưng cùng kiểm tra một ý kiến thức (cùng khái niệm, đặc điểm, quy ` +
+    `tắc hay sự kiện, kể cả khi khác cách hỏi hoặc câu này để lộ đáp án câu kia) — ví dụ một câu hỏi "phần mềm nguồn mở ` +
+    `cho phép làm gì" ở chủ đề này và một câu hỏi "phần mềm tự do cho phép nghiên cứu, thay đổi, phân phối" ở chủ đề ` +
+    `khác. KHÔNG xét các cặp cùng chủ đề. Ghi a, b là số trong ngoặc vuông; không có cặp nào thì để danh sách rỗng.\n\n` +
+    listing;
+
+  const result = await llm({
+    instruction,
+    model: AUDIT_MODEL,
+    jsonVia: "output",
+    effort: "low",
+    schema: {
+      type: Type.OBJECT,
+      properties: {
+        pairs: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              a: { type: Type.INTEGER },
+              b: { type: Type.INTEGER },
+              reason: { type: Type.STRING, description: "Ý kiến thức bị hỏi trùng" },
+            },
+            required: ["a", "b", "reason"],
+          },
+        },
+      },
+      required: ["pairs"],
+    },
+    maxOutputTokens: 3000,
+  });
+
+  const pairs = ((result.json as { pairs?: { a?: unknown; b?: unknown }[] } | undefined)?.pairs ?? []) as {
+    a?: unknown;
+    b?: unknown;
+  }[];
+  return (Array.isArray(pairs) ? pairs : [])
+    .map((p) => [items[Number(p?.a) - 1], items[Number(p?.b) - 1]] as const)
+    .filter(([a, b]) => a && b && a.topic !== b.topic)
+    .map(([a, b]) => [a!.key, b!.key] as [string, string]);
 }
 
 async function findOverlapsInGroup(

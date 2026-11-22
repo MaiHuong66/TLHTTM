@@ -704,7 +704,7 @@ export function finalizeQuestions(
  * mặc định dùng model mạnh hơn; đổi bằng biến môi trường CLAUDE_AUDIT_MODEL. Chỉ áp dụng khi dùng Claude. */
 const AUDIT_MODEL = process.env.CLAUDE_AUDIT_MODEL?.trim() || "claude-sonnet-5-5";
 /** Mức suy nghĩ của các bước kiểm định — đủ để phán đoán nhưng vẫn xong trong giới hạn 60s. */
-const AUDIT_EFFORT = (process.env.CLAUDE_AUDIT_EFFORT?.trim() as "low" | "medium" | "high" | undefined) || "low";
+const AUDIT_EFFORT = (process.env.CLAUDE_AUDIT_EFFORT?.trim() as "low" | "medium" | "high" | undefined) || "medium";
 
 /** 1 câu trong ngân hàng đang soạn, kèm khóa tạm `key` để các bước kiểm định tham chiếu. */
 export interface AuditItem {
@@ -780,29 +780,35 @@ export async function verifyAnswers(doc: DocumentInput, items: AuditItem[]): Pro
 }
 
 /** Kiểm định 2: tìm các cặp câu THUỘC Ô KHÁC NHAU nhưng cùng hỏi một nội dung kiến thức (dù khác mức độ hay cách
- * hỏi). Các câu cùng ô là câu dự phòng thay thế nhau (mỗi đề chỉ bốc 1) nên không xét. Trả về cặp khóa câu. */
+ * hỏi). Các câu cùng ô là câu dự phòng thay thế nhau (mỗi đề chỉ bốc 1) nên không xét. Rà riêng từng chủ đề con (các
+ * lệnh gọi chạy song song) để AI tập trung hơn — chủ đề con được lập để không chồng lấn nhau. Trả về cặp khóa câu. */
 export async function findOverlaps(items: AuditItem[]): Promise<[string, string][]> {
-  if (items.length < 2) return [];
-  const byTopic = new Map<string, { item: AuditItem; n: number }[]>();
-  items.forEach((item, i) => byTopic.set(item.topic, [...(byTopic.get(item.topic) ?? []), { item, n: i + 1 }]));
-  const listing = [...byTopic.entries()]
-    .map(
-      ([topic, list]) =>
-        `### Chủ đề: ${topic}\n` +
-        list
-          .map(({ item, n }) => `[${n}] (ô ${item.cell}, ${item.level}) ${item.question} → Đáp án: ${item.options[item.correctAnswer]}`)
-          .join("\n")
-    )
-    .join("\n\n");
+  const byTopic = new Map<string, AuditItem[]>();
+  for (const item of items) byTopic.set(item.topic, [...(byTopic.get(item.topic) ?? []), item]);
+  const groups = [...byTopic.values()].filter((list) => new Set(list.map((i) => i.cell)).size > 1);
+  const results = await Promise.all(groups.map((list) => findOverlapsInGroup(list)));
+  return results.flat();
+}
+
+async function findOverlapsInGroup(items: AuditItem[]): Promise<[string, string][]> {
+  const listing = items
+    .map((item, i) => `[${i + 1}] (ô ${item.cell}, ${item.level}) ${item.question} → Đáp án: ${item.options[item.correctAnswer]}`)
+    .join("\n");
 
   const instruction =
-    `Bạn là giám khảo thẩm định ngân hàng câu hỏi trắc nghiệm. Mỗi đề thi bốc đúng 1 câu từ MỖI Ô; các câu cùng một ô ` +
-    `là câu dự phòng thay thế nhau nên KHÔNG xét với nhau. Hãy tìm MỌI cặp câu thuộc HAI Ô KHÁC NHAU mà nếu cùng xuất ` +
-    `hiện trong một đề sẽ bị coi là HỎI TRÙNG NỘI DUNG, tức là cùng kiểm tra một ý kiến thức: cùng một khái niệm, đặc ` +
-    `điểm, quy tắc hay sự kiện, kể cả khi khác mức độ (vd một câu hỏi đặc điểm, câu kia là tình huống áp dụng đúng đặc ` +
-    `điểm đó), khác cách diễn đạt, hoặc câu này gợi ý/để lộ đáp án câu kia. Không tính các câu chỉ cùng chủ đề rộng ` +
-    `nhưng hỏi các ý khác nhau. Ghi a, b là số trong ngoặc vuông của 2 câu; nếu không có cặp nào thì trả về danh sách ` +
-    `rỗng.\n\n${listing}`;
+    `Bạn là giám khảo thẩm định ngân hàng câu hỏi trắc nghiệm của chủ đề "${items[0].topic}". Mỗi đề thi bốc đúng 1 câu ` +
+    `từ MỖI Ô; các câu cùng một ô là câu dự phòng thay thế nhau nên KHÔNG xét với nhau.\n` +
+    `Bước 1 (ideas): với từng câu, ghi ngắn gọn Ý KIẾN THỨC cốt lõi mà câu đó kiểm tra — tức là điều sinh viên phải ` +
+    `biết để chọn đúng đáp án (không phải bối cảnh tình huống).\n` +
+    `Bước 2 (pairs): liệt kê MỌI cặp câu thuộc HAI Ô KHÁC NHAU có ý kiến thức cốt lõi trùng hoặc chồng lấn — nếu cùng ` +
+    `xuất hiện trong một đề sẽ bị coi là hỏi trùng nội dung. Tính là TRÙNG cả khi khác mức độ và khác cách hỏi, ví dụ:\n` +
+    `- "Máy xách tay có ưu điểm gì?" và "Anh A hay đi công tác nên chọn máy nào?" (đáp án: máy xách tay vì dễ di ` +
+    `chuyển) → cùng kiểm tra ưu điểm di động của máy xách tay.\n` +
+    `- "Phần mềm nguồn mở khác phần mềm thương mại ở điểm nào?" (được sửa và phân phối lại) và "Công ty muốn sửa mã ` +
+    `nguồn rồi phân phối lại thì chọn loại phần mềm nào?" → cùng kiểm tra quyền sửa/phân phối của nguồn mở.\n` +
+    `- Câu này nêu sẵn hoặc để lộ đáp án của câu kia.\n` +
+    `KHÔNG tính là trùng nếu hai câu chỉ cùng chủ đề nhưng kiểm tra các ý kiến thức khác nhau. Ghi a, b là số trong ngoặc ` +
+    `vuông; không có cặp nào thì để danh sách rỗng.\n\n${listing}`;
 
   const result = await llm({
     instruction,
@@ -812,6 +818,14 @@ export async function findOverlaps(items: AuditItem[]): Promise<[string, string]
     schema: {
       type: Type.OBJECT,
       properties: {
+        ideas: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: { n: { type: Type.INTEGER }, idea: { type: Type.STRING } },
+            required: ["n", "idea"],
+          },
+        },
         pairs: {
           type: Type.ARRAY,
           items: {
@@ -825,7 +839,7 @@ export async function findOverlaps(items: AuditItem[]): Promise<[string, string]
           },
         },
       },
-      required: ["pairs"],
+      required: ["ideas", "pairs"],
     },
     maxOutputTokens: 4000,
   });

@@ -74,8 +74,24 @@ function selectQuestions(
   numChapters: number,
   questionsPerChapter: number,
   fixedExam: boolean,
-  useAllQuestions: boolean
+  useAllQuestions: boolean,
+  matrixCells: string[] | undefined
 ): Question[] {
+  if (matrixCells && matrixCells.length > 0) {
+    // Đề theo ma trận: mỗi ô (chủ đề con × mức độ) bốc ngẫu nhiên đúng 1 trong các câu dự phòng của ô — tỉ lệ mức độ
+    // luôn cố định, không lặp nội dung, mỗi lượt khác nhau.
+    const byCell = new Map<string, Question[]>();
+    for (const q of questions) {
+      if (!q.cell) continue;
+      byCell.set(q.cell, [...(byCell.get(q.cell) ?? []), q]);
+    }
+    const picked = matrixCells
+      .map((cell) => byCell.get(cell) ?? [])
+      .filter((pool) => pool.length > 0)
+      .map((pool) => pool[Math.floor(Math.random() * pool.length)]);
+    return shuffle(picked);
+  }
+
   if (useAllQuestions) {
     // Đề gồm đúng các câu đã tạo: lượt nào cũng đủ tất cả các câu, chỉ khác thứ tự.
     return shuffle(questions);
@@ -190,7 +206,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       examConfig?.numChapters ?? 1,
       examConfig?.questionsPerChapterInExam ?? DEFAULT_QUESTIONS_PER_CHAPTER,
       examConfig?.fixedExam === true,
-      examConfig?.useAllQuestions === true
+      examConfig?.useAllQuestions === true,
+      examConfig?.matrixCells
     );
 
     const optionOrders: Record<string, AnswerKey[]> | undefined = examConfig?.shuffleOptions

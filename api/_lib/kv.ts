@@ -1,6 +1,6 @@
 import { Redis } from "@upstash/redis";
 import type { AnswerKey, Lecture, Question } from "../../shared/types.js";
-import type { ContentPoint, RawQuestion, UploadedFileRef } from "./gemini.js";
+import type { QuestionMatrix, RawQuestion, UploadedFileRef } from "./gemini.js";
 
 const LECTURE_KEY = "tlhttm:lecture";
 const QUESTIONS_KEY = "tlhttm:questions";
@@ -62,6 +62,8 @@ export interface ExamConfig {
   /** true: đảo thứ tự 4 đáp án của từng câu ở mỗi lượt làm. Chỉ bật cho đề tạo theo cách mới — câu hỏi cũ có
    * thể có phương án kiểu "Cả A và B" nên không đảo. */
   shuffleOptions?: boolean;
+  /** Đề theo ma trận: danh sách ô (chủ đề con × mức độ); mỗi lượt làm bốc ngẫu nhiên đúng 1 câu từ mỗi ô. */
+  matrixCells?: string[];
 }
 
 export async function getExamConfig(): Promise<ExamConfig | null> {
@@ -92,19 +94,21 @@ export interface UploadJob {
   pastedText: string;
   extractedTexts: { name: string; text: string }[];
   uploadedFiles: UploadedFileRef[];
-  totalQuestions: number;
+  /** Số câu mỗi mức trong 1 đề (Nhận biết, Thông hiểu, Vận dụng, Vận dụng cao). */
+  levelCounts: number[];
+  variantsPerCell: number;
   allowRetake: boolean;
   timeLimitMinutes: number;
-  /** Bước còn lại: "lecture" | "plan" | "plan-more:{lần}" | "q:{vị trí nội dung, cách nhau bằng dấu phẩy}". */
+  /** Bước còn lại: "lecture" | "plan" | "q:{vị trí ô trong ma trận, cách nhau bằng dấu phẩy}". */
   steps: string[];
   totalSteps: number;
   lecture?: Omit<Lecture, "updatedAt">;
-  /** Danh sách nội dung kiến thức (mỗi nội dung 1 câu), tạo ở bước "plan". */
-  plan?: ContentPoint[];
-  /** Câu hỏi đã sinh, key = vị trí nội dung trong `plan`. */
-  questionsByPoint: Record<number, RawQuestion>;
-  /** Vị trí nội dung đã được cho sinh lại (mỗi lần sinh lại ghi thêm 1 phần tử) vì AI trả về thiếu/không hợp lệ. */
-  retriedPoints: number[];
+  /** Ma trận đề (chủ đề con × mức độ), tạo ở bước "plan". */
+  matrix?: QuestionMatrix;
+  /** Câu dự phòng đã soạn cho từng ô, key = id ô. */
+  questionsByCell: Record<string, RawQuestion[]>;
+  /** Số lần đã cho soạn lại từng ô (key = id ô) vì AI trả về thiếu/không hợp lệ. */
+  cellRetries: Record<string, number>;
   error?: string;
 }
 

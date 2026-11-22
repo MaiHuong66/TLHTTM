@@ -262,143 +262,169 @@ export async function generateLecture(doc: DocumentInput): Promise<Omit<Lecture,
 /** 4 mức độ nhận thức dùng khi ra đề, theo thứ tự từ thấp tới cao. */
 export const COGNITIVE_LEVELS: Difficulty[] = ["Nhận biết", "Thông hiểu", "Vận dụng", "Vận dụng cao"];
 
+/** Số câu mỗi mức trong 1 đề mặc định (theo thứ tự COGNITIVE_LEVELS): 8 NB, 7 TH, 10 VD, 5 VDC = 30 câu. */
+export const DEFAULT_LEVEL_COUNTS = [8, 7, 10, 5];
+
 const LEVEL_GUIDE =
   `"Nhận biết": nhớ lại, nhận ra đúng khái niệm, định nghĩa, sự kiện, thuật ngữ có trong tài liệu. ` +
   `"Thông hiểu": giải thích, phân biệt, so sánh, diễn giải ý nghĩa, nhận ra ví dụ đúng của một khái niệm. ` +
   `"Vận dụng": áp dụng kiến thức vào một tình huống cụ thể, quen thuộc để giải quyết vấn đề hoặc chọn cách làm đúng. ` +
   `"Vận dụng cao": xử lý tình huống mới, phức tạp, cần phân tích, đánh giá hoặc kết hợp nhiều bước suy luận.`;
 
-/** Số mỗi lô câu hỏi — đủ nhỏ để 1 lần gọi AI luôn xong trong giới hạn 60s của Vercel. */
-export const QUESTIONS_PER_BATCH = 8;
+/** Một lần gọi AI soạn tối đa ngần này câu — đủ nhỏ để luôn xong trong giới hạn 60s của Vercel. */
+const MAX_QUESTIONS_PER_CALL = 9;
 
-/** Một đơn vị nội dung kiến thức riêng biệt trong tài liệu; mỗi đơn vị được hỏi đúng 1 câu. */
-export interface ContentPoint {
-  topic: string;
-  level: Difficulty;
+/** Số ô của ma trận soạn trong 1 bước, sao cho (số ô × số câu mỗi ô) không vượt MAX_QUESTIONS_PER_CALL. */
+export function cellsPerBatch(variantsPerCell: number): number {
+  return Math.max(1, Math.floor(MAX_QUESTIONS_PER_CALL / variantsPerCell));
 }
 
-/** Chia đều `total` câu cho 4 mức độ, phần dư dồn cho các mức thấp trước (vd 30 → 8, 8, 7, 7). */
-export function levelTargets(total: number): Map<Difficulty, number> {
-  const base = Math.floor(total / COGNITIVE_LEVELS.length);
-  const remainder = total % COGNITIVE_LEVELS.length;
-  return new Map(COGNITIVE_LEVELS.map((level, i) => [level, base + (i < remainder ? 1 : 0)]));
+/** 1 ô của ma trận đề = (chủ đề con × mức độ). Mỗi đề bốc đúng 1 câu từ mỗi ô. */
+export interface MatrixCell {
+  /** "{vị trí chủ đề}-{vị trí mức độ}", vd "3-2" = chủ đề thứ 4, mức Vận dụng. */
+  id: string;
+  topic: number;
+  level: Difficulty;
+  /** Nội dung trọng tâm cụ thể ô này hỏi (khác các ô khác cùng chủ đề). Rỗng nếu ô được hệ thống tự thêm. */
+  focus: string;
+}
+
+export interface QuestionMatrix {
+  topics: { name: string; description: string }[];
+  cells: MatrixCell[];
 }
 
 function normalizeText(text: string): string {
   return text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
 
-/** Bỏ nội dung trùng, rồi đảm bảo số nội dung mỗi mức đúng chỉ tiêu: nội dung thừa ở 1 mức được chuyển sang
- * mức còn thiếu. Giữ nguyên thứ tự xuất hiện trong tài liệu. */
-export function balanceContentPoints(points: ContentPoint[], total: number): ContentPoint[] {
-  const targets = levelTargets(total);
-  const seen = new Set<string>();
-  const unique = points.filter((p) => {
-    const key = normalizeText(p.topic);
-    if (!key || seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-
-  const counts = new Map<Difficulty, number>(COGNITIVE_LEVELS.map((l) => [l, 0]));
-  const assigned: (ContentPoint | null)[] = unique.map((p) => {
-    const level = COGNITIVE_LEVELS.includes(p.level) ? p.level : null;
-    if (level && counts.get(level)! < targets.get(level)!) {
-      counts.set(level, counts.get(level)! + 1);
-      return { topic: p.topic, level };
-    }
-    return null;
-  });
-
-  unique.forEach((p, i) => {
-    if (assigned[i]) return;
-    const missing = COGNITIVE_LEVELS.find((l) => counts.get(l)! < targets.get(l)!);
-    if (!missing) return;
-    counts.set(missing, counts.get(missing)! + 1);
-    assigned[i] = { topic: p.topic, level: missing };
-  });
-
-  return assigned.filter((p): p is ContentPoint => p !== null).slice(0, total);
+function cellId(topic: number, levelIdx: number): string {
+  return `${topic}-${levelIdx}`;
 }
 
-const contentPlanSchema = {
-  type: Type.ARRAY,
-  items: {
+/** Số chủ đề con: bằng số câu của mức nhiều nhất, để mỗi mức có đủ chủ đề khác nhau (mỗi chủ đề tối đa 1 ô/mức). */
+export function topicCount(levelCounts: number[]): number {
+  return Math.max(1, ...levelCounts);
+}
+
+/**
+ * Đưa ma trận AI đề xuất về đúng ràng buộc: mỗi chủ đề tối đa 1 ô mỗi mức, số ô mỗi mức đúng `levelCounts`, và số ô
+ * giữa các chủ đề chênh nhau không quá 1 (rải đều). Giữ đề xuất của AI nhiều nhất có thể (AI biết chủ đề nào hợp
+ * mức nào); ô hệ thống phải tự thêm/chuyển thì để trống trọng tâm.
+ */
+export function repairMatrix(
+  topics: { name: string; description: string; cells: { level: string; focus: string }[] }[],
+  levelCounts: number[]
+): QuestionMatrix {
+  const n = topics.length;
+  // has[t][l] = trọng tâm của ô (t, l) nếu ô tồn tại, undefined nếu không.
+  const has: (string | undefined)[][] = topics.map(() => COGNITIVE_LEVELS.map(() => undefined));
+  topics.forEach((t, ti) => {
+    for (const c of t.cells ?? []) {
+      const li = COGNITIVE_LEVELS.indexOf(c?.level as Difficulty);
+      if (li >= 0 && has[ti][li] === undefined) has[ti][li] = typeof c.focus === "string" ? c.focus.trim() : "";
+    }
+  });
+  const load = (ti: number) => has[ti].filter((f) => f !== undefined).length;
+
+  COGNITIVE_LEVELS.forEach((_, li) => {
+    const target = Math.min(levelCounts[li] ?? 0, n);
+    const owners = () => has.map((row, ti) => (row[li] !== undefined ? ti : -1)).filter((ti) => ti >= 0);
+    // Thừa: bỏ ô ở chủ đề đang nhiều ô nhất.
+    while (owners().length > target) {
+      const victim = owners().sort((a, b) => load(b) - load(a) || b - a)[0];
+      has[victim][li] = undefined;
+    }
+    // Thiếu: thêm vào chủ đề chưa có mức này và đang ít ô nhất.
+    while (owners().length < target) {
+      const candidates = has.map((_, ti) => ti).filter((ti) => has[ti][li] === undefined);
+      const pick = candidates.sort((a, b) => load(a) - load(b) || a - b)[0];
+      has[pick][li] = "";
+    }
+  });
+
+  // Rải đều: chuyển 1 ô cùng mức từ chủ đề nhiều ô sang chủ đề ít ô hơn ít nhất 2 (không đổi số ô mỗi mức).
+  for (let guard = 0; guard < 200; guard++) {
+    const order = has.map((_, ti) => ti).sort((a, b) => load(b) - load(a));
+    const heavy = order[0];
+    const light = order[order.length - 1];
+    if (load(heavy) - load(light) < 2) break;
+    const li = COGNITIVE_LEVELS.findIndex((_, l) => has[heavy][l] !== undefined && has[light][l] === undefined);
+    if (li < 0) break;
+    has[heavy][li] = undefined;
+    has[light][li] = "";
+  }
+
+  const cells: MatrixCell[] = [];
+  has.forEach((row, ti) =>
+    row.forEach((focus, li) => {
+      if (focus !== undefined) cells.push({ id: cellId(ti, li), topic: ti, level: COGNITIVE_LEVELS[li], focus });
+    })
+  );
+  return {
+    topics: topics.map((t, i) => ({
+      name: t.name?.trim() || `Chủ đề ${i + 1}`,
+      description: t.description?.trim() ?? "",
+    })),
+    cells,
+  };
+}
+
+function matrixPlanSchema(numTopics: number) {
+  const slots = Array.from({ length: numTopics }, (_, i) => `chu_de_${i + 1}`);
+  const topicSchema = {
     type: Type.OBJECT,
     properties: {
-      topic: {
-        type: Type.STRING,
-        description: "Mô tả cụ thể 1 đơn vị nội dung kiến thức (1-2 câu), đủ rõ để biết chính xác sẽ hỏi điều gì",
+      name: { type: Type.STRING, description: "Tên ngắn gọn của chủ đề con" },
+      description: { type: Type.STRING, description: "Phạm vi kiến thức của chủ đề con trong tài liệu (1-2 câu)" },
+      cells: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            level: { type: Type.STRING, enum: COGNITIVE_LEVELS },
+            focus: {
+              type: Type.STRING,
+              description: "Nội dung trọng tâm cụ thể sẽ hỏi ở ô này, khác các ô khác của cùng chủ đề",
+            },
+          },
+          required: ["level", "focus"],
+        },
       },
-      level: { type: Type.STRING, enum: COGNITIVE_LEVELS },
     },
-    required: ["topic", "level"],
-  },
-};
-
-/** Bước 1: liệt kê đúng `total` đơn vị nội dung KHÁC NHAU trong tài liệu và gán mức độ cho từng đơn vị — để mỗi
- * câu hỏi sau đó kiểm tra 1 nội dung riêng, không có 2 câu cùng hỏi 1 nội dung theo 2 cách. */
-export async function planContentPoints(doc: DocumentInput, total: number): Promise<ContentPoint[]> {
-  const targets = levelTargets(total);
-  const quota = COGNITIVE_LEVELS.map((l) => `${targets.get(l)} "${l}"`).join(", ");
-
-  const instruction =
-    `Bạn là chuyên gia ra đề kiểm tra trắc nghiệm. Đọc toàn bộ tài liệu bên dưới và lập danh sách ĐÚNG ${total} ` +
-    `đơn vị nội dung kiến thức để ra ${total} câu hỏi, mỗi đơn vị sẽ được hỏi đúng 1 câu.\n` +
-    `Yêu cầu:\n` +
-    `- Mỗi đơn vị là MỘT ý kiến thức cụ thể, riêng biệt (một khái niệm, định nghĩa, đặc điểm, nguyên tắc, quy trình, ` +
-    `ứng dụng...). Hai đơn vị bất kỳ KHÔNG được trùng nhau, không bao hàm nhau, không phải 2 cách diễn đạt/2 cách ` +
-    `hỏi khác nhau của cùng một ý.\n` +
-    `- Trải đều khắp các phần của tài liệu, không dồn vào một phần.\n` +
-    `- Chỉ lấy nội dung có trong tài liệu.\n` +
-    `- Gán mức độ cho từng đơn vị, phân bổ đúng: ${quota}. Mức độ phải phù hợp với nội dung. ${LEVEL_GUIDE}\n` +
-    `- Liệt kê theo thứ tự xuất hiện trong tài liệu. Viết bằng tiếng Việt.`;
-
-  const result = await llm({ instruction, doc, schema: contentPlanSchema, maxOutputTokens: 6000 });
-  const parsed = result.json as ContentPoint[] | undefined;
-  if (!Array.isArray(parsed)) {
-    throw new Error("AI trả về danh sách nội dung không hợp lệ.");
-  }
-
-  const points = balanceContentPoints(
-    parsed.filter((p) => p && typeof p.topic === "string"),
-    total
-  );
-  if (points.length === 0) {
-    throw new Error("Không tìm được nội dung nào trong tài liệu để ra câu hỏi.");
-  }
-  return points;
+    required: ["name", "description", "cells"],
+  };
+  // Mỗi chủ đề 1 ô bắt buộc riêng (không dùng mảng) để AI luôn trả đủ số chủ đề.
+  return { type: Type.OBJECT, properties: Object.fromEntries(slots.map((s) => [s, topicSchema])), required: slots };
 }
 
-/** Bổ sung khi danh sách nội dung còn thiếu so với `total`: xin thêm các nội dung KHÁC những nội dung đã có, đúng
- * số còn thiếu ở từng mức độ. */
-export async function planMoreContentPoints(
-  doc: DocumentInput,
-  existing: ContentPoint[],
-  total: number
-): Promise<ContentPoint[]> {
-  const targets = levelTargets(total);
-  const missing = COGNITIVE_LEVELS.map((l) => ({
-    level: l,
-    count: Math.max(0, targets.get(l)! - existing.filter((p) => p.level === l).length),
-  })).filter((m) => m.count > 0);
-  const need = missing.reduce((sum, m) => sum + m.count, 0);
-  if (need === 0) return existing;
+/** Bước 1: chia tài liệu thành các chủ đề con và lập ma trận đề (chủ đề con × mức độ), mỗi ô có trọng tâm riêng. */
+export async function planMatrix(doc: DocumentInput, levelCounts: number[]): Promise<QuestionMatrix> {
+  const numTopics = topicCount(levelCounts);
+  const total = levelCounts.reduce((a, b) => a + b, 0);
+  const quota = COGNITIVE_LEVELS.map((l, i) => `${levelCounts[i]} ô "${l}"`).join(", ");
+  const perTopic = total / numTopics;
 
   const instruction =
-    `Bạn là chuyên gia ra đề kiểm tra trắc nghiệm. Từ tài liệu bên dưới đã chọn được các đơn vị nội dung kiến thức ` +
-    `sau, mỗi đơn vị sẽ được hỏi đúng 1 câu:\n${existing.map((p, i) => `${i + 1}. ${p.topic}`).join("\n")}\n\n` +
-    `Hãy bổ sung ĐÚNG ${need} đơn vị nội dung MỚI, gồm: ${missing.map((m) => `${m.count} "${m.level}"`).join(", ")}. ` +
-    `Mỗi đơn vị mới là một ý kiến thức cụ thể có trong tài liệu, KHÔNG trùng, không bao hàm và không phải cách diễn ` +
-    `đạt khác của bất kỳ đơn vị nào ở trên hay của nhau. Có thể khai thác ví dụ, chi tiết, ứng dụng, lưu ý chưa được ` +
-    `chọn. ${LEVEL_GUIDE} Viết bằng tiếng Việt.`;
+    `Bạn là chuyên gia xây dựng ma trận đề kiểm tra trắc nghiệm. Đọc toàn bộ tài liệu bên dưới và:\n` +
+    `1) Chia nội dung tài liệu thành ĐÚNG ${numTopics} chủ đề con (ghi vào chu_de_1 ... chu_de_${numTopics}): mỗi chủ đề ` +
+    `là một mảng kiến thức riêng (ví dụ: phần cứng, mạng máy tính, bản quyền, an toàn thông tin...), các chủ đề không ` +
+    `chồng lấn nhau và cùng nhau bao quát toàn bộ tài liệu.\n` +
+    `2) Lập ma trận đề ${total} câu: mỗi ô là (chủ đề con × mức độ), mỗi đề sẽ có đúng 1 câu cho mỗi ô. Tổng trên tất cả ` +
+    `chủ đề phải có đúng: ${quota}. Mỗi chủ đề có TỐI ĐA 1 ô cho mỗi mức độ và có khoảng ${Number.isInteger(perTopic) ? perTopic : `${Math.floor(perTopic)}-${Math.ceil(perTopic)}`} ô. ` +
+    `Chọn mức độ phù hợp với nội dung của chủ đề (chủ đề có quy trình, quy tắc, tình huống thực tế thì hợp với ` +
+    `"Vận dụng"/"Vận dụng cao"). ${LEVEL_GUIDE}\n` +
+    `3) Với mỗi ô, ghi "focus" là nội dung trọng tâm CỤ THỂ sẽ hỏi. Các ô trong cùng một chủ đề phải có trọng tâm ` +
+    `KHÁC NHAU, không trùng, không bao hàm nhau, để đề không hỏi lặp một nội dung.\n` +
+    `Chỉ dùng nội dung có trong tài liệu. Viết bằng tiếng Việt.`;
 
-  const result = await llm({ instruction, doc, schema: contentPlanSchema, maxOutputTokens: 3000 });
-  const extra = Array.isArray(result.json) ? (result.json as ContentPoint[]) : [];
-  return balanceContentPoints(
-    [...existing, ...extra.filter((p) => p && typeof p.topic === "string")],
-    total
-  );
+  const result = await llm({ instruction, doc, schema: matrixPlanSchema(numTopics), maxOutputTokens: 6000 });
+  const parsed = result.json as Record<string, { name: string; description: string; cells: { level: string; focus: string }[] }>;
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("AI trả về ma trận đề không hợp lệ.");
+  }
+  const topics = Array.from({ length: numTopics }, (_, i) => parsed[`chu_de_${i + 1}`] ?? { name: "", description: "", cells: [] });
+  return repairMatrix(topics, levelCounts);
 }
 
 const questionSchema = {
@@ -414,14 +440,15 @@ const questionSchema = {
   required: ["question", "optionA", "optionB", "optionC", "optionD", "correctAnswer"],
 };
 
-/** Mỗi câu của lô có 1 ô riêng bắt buộc ("cau_1", "cau_2"...) thay vì 1 mảng: với chế độ strict, AI buộc phải trả đủ
- * từng câu và đủ từng trường (với mảng, AI có lúc trả ít câu hơn số được giao). */
-function slotName(i: number): string {
-  return `cau_${i + 1}`;
+/** Ô bắt buộc riêng cho từng câu ("o1_cau1", "o1_cau2", "o2_cau1"...) thay vì 1 mảng: với chế độ strict, AI buộc phải
+ * trả đủ từng câu và đủ từng trường (với mảng, AI có lúc trả ít câu hơn số được giao). */
+function slotName(cellPos: number, variant: number): string {
+  return `o${cellPos + 1}_cau${variant + 1}`;
 }
 
-function questionBatchSchema(count: number) {
-  const slots = Array.from({ length: count }, (_, i) => slotName(i));
+function questionBatchSchema(cellCount: number, variants: number) {
+  const slots: string[] = [];
+  for (let c = 0; c < cellCount; c++) for (let v = 0; v < variants; v++) slots.push(slotName(c, v));
   return {
     type: Type.OBJECT,
     properties: Object.fromEntries(slots.map((name) => [name, questionSchema])),
@@ -441,104 +468,136 @@ export interface RawQuestion {
 
 const ANSWER_KEYS: AnswerKey[] = ["A", "B", "C", "D"];
 
-/** Bước 2: soạn đúng 1 câu cho mỗi nội dung được giao (`pointIndexes` là vị trí trong `plan`). Trả về câu hỏi
- * theo vị trí nội dung; nội dung nào AI không trả về câu hợp lệ sẽ không có trong kết quả. */
-export async function generateQuestionsForPoints(
+/** Bước 2: soạn `variants` câu dự phòng cho mỗi ô được giao (`cellIds`). Các câu của cùng 1 ô thay thế được cho nhau
+ * (mỗi đề chỉ bốc 1), nên cùng trọng tâm và mức độ nhưng khác cách hỏi/tình huống. Câu không hợp lệ bị bỏ. */
+export async function generateCellQuestions(
   doc: DocumentInput,
-  plan: ContentPoint[],
-  pointIndexes: number[],
+  matrix: QuestionMatrix,
+  cellIds: string[],
+  variants: number,
   onReject: (reason: string, item: unknown) => void = () => undefined
-): Promise<Record<number, RawQuestion>> {
-  const assigned = pointIndexes
-    .map((idx, i) => `${i + 1}. [${plan[idx].level}] ${plan[idx].topic}`)
-    .join("\n");
-  const others = plan
-    .map((p, idx) => ({ p, idx }))
-    .filter(({ idx }) => !pointIndexes.includes(idx))
-    .map(({ p }) => `- ${p.topic}`)
-    .join("\n");
+): Promise<Record<string, RawQuestion[]>> {
+  const cells = cellIds
+    .map((id) => matrix.cells.find((c) => c.id === id))
+    .filter((c): c is MatrixCell => !!c);
+  if (cells.length === 0) return {};
+
+  const describe = (c: MatrixCell, k: number) => {
+    const topic = matrix.topics[c.topic];
+    const siblings = matrix.cells
+      .filter((o) => o.topic === c.topic && o.id !== c.id && o.focus)
+      .map((o) => `"${o.focus}"`);
+    return (
+      `Ô ${k} — chủ đề: ${topic.name}${topic.description ? ` (${topic.description})` : ""}; mức độ: ${c.level}; ` +
+      (c.focus
+        ? `trọng tâm: ${c.focus}.`
+        : `trọng tâm: tự chọn 1 nội dung cụ thể của chủ đề này phù hợp mức độ.`) +
+      (siblings.length ? ` Không hỏi vào các trọng tâm thuộc ô khác của chủ đề: ${siblings.join("; ")}.` : "") +
+      ` Ghi vào ${Array.from({ length: variants }, (_, v) => slotName(k - 1, v)).join(", ")}.`
+    );
+  };
 
   const instruction =
-    `Bạn là chuyên gia ra đề kiểm tra trắc nghiệm. Dựa HOÀN TOÀN vào tài liệu bên dưới, soạn ĐÚNG 1 câu hỏi ` +
-    `trắc nghiệm cho MỖI nội dung trong danh sách được giao (tổng ${pointIndexes.length} câu). Câu cho nội dung số k ` +
-    `ghi vào ô cau_k (nội dung 1 → cau_1, nội dung 2 → cau_2...).\n\n` +
-    `NỘI DUNG ĐƯỢC GIAO (kèm mức độ bắt buộc):\n${assigned}\n\n` +
-    `Yêu cầu cho từng câu:\n` +
-    `- Chỉ kiểm tra đúng nội dung được giao cho câu đó, đúng mức độ ghi trong ngoặc vuông. ${LEVEL_GUIDE}\n` +
+    `Bạn là chuyên gia ra đề kiểm tra trắc nghiệm. Dựa HOÀN TOÀN vào tài liệu bên dưới, soạn câu hỏi cho các ô ` +
+    `của ma trận đề sau, mỗi ô ${variants} câu:\n${cells.map((c, i) => describe(c, i + 1)).join("\n")}\n\n` +
+    `Yêu cầu:\n` +
+    `- ${variants > 1 ? `${variants} câu của cùng một ô là các câu DỰ PHÒNG thay thế cho nhau (mỗi đề chỉ bốc 1 câu ` +
+      `của ô): cùng kiểm tra trọng tâm của ô và đúng mức độ, nhưng khác nhau rõ rệt về cách hỏi, tình huống hoặc ` +
+      `ví dụ — không được là cùng một câu chỉ đổi vài chữ.\n- ` : ""}` +
+    `Đúng mức độ của ô. ${LEVEL_GUIDE}\n` +
     `- Câu "Vận dụng" và "Vận dụng cao" BẮT BUỘC đặt trong một tình huống cụ thể (một người, một tổ chức, một sự ` +
     `việc...) để sinh viên phải áp dụng hoặc phân tích kiến thức; không được chỉ hỏi lại định nghĩa hay đặc điểm.\n` +
-    `- Không hỏi lại nội dung của câu khác, kể cả bằng cách diễn đạt khác.\n` +
+    `- Câu của một ô không được hỏi vào trọng tâm của ô khác.\n` +
     `- Có đúng 4 phương án, chỉ 1 phương án đúng; các phương án sai phải hợp lý, dễ gây nhầm với người chưa nắm ` +
     `bài, cùng dạng và độ dài tương đương phương án đúng. Phương án đúng KHÔNG được là phương án dài nhất/chi tiết ` +
     `nhất một cách dễ nhận ra, và không chép nguyên văn câu trong tài liệu trong khi các phương án sai lại diễn đạt khác.\n` +
+    `- Vị trí phương án đúng (A, B, C, D) phân bố đa dạng.\n` +
     `- Thứ tự các phương án sẽ bị XÁO TRỘN khi thi, nên TUYỆT ĐỐI KHÔNG dùng phương án kiểu "Tất cả các đáp án ` +
     `trên", "Cả A và B", "Không có đáp án nào đúng", và không nhắc tới chữ cái A, B, C, D trong câu hỏi hay phương án ` +
     `(nếu tình huống cần đặt tên các lựa chọn thì dùng "cách 1", "cách 2" hoặc gọi tên cụ thể, không dùng "phương án A").\n` +
-    `- Câu hỏi rõ ràng, không mơ hồ, viết bằng tiếng Việt.` +
-    (others
-      ? `\n\nCÁC NỘI DUNG SAU ĐÃ/SẼ ĐƯỢC HỎI Ở CÂU KHÁC — không được hỏi về chúng:\n${others}`
-      : "");
+    `- Câu hỏi rõ ràng, không mơ hồ, viết bằng tiếng Việt.`;
 
   const result = await llm({
     instruction,
     doc,
-    schema: questionBatchSchema(pointIndexes.length),
-    maxOutputTokens: 8000,
+    schema: questionBatchSchema(cells.length, variants),
+    maxOutputTokens: 10000,
   });
   const parsed = result.json as Record<string, Omit<RawQuestion, "difficulty"> | undefined> | undefined;
   if (!parsed || typeof parsed !== "object") {
     throw new Error("AI trả về câu hỏi không hợp lệ.");
   }
 
-  const byPoint: Record<number, RawQuestion> = {};
-  pointIndexes.forEach((pointIdx, i) => {
-    const q = parsed[slotName(i)];
-    const options = [q?.optionA, q?.optionB, q?.optionC, q?.optionD];
-    const reason = !q
-      ? "thiếu câu"
-      : typeof q.question !== "string" || !q.question.trim()
-        ? "thiếu câu hỏi"
-        : options.some((o) => typeof o !== "string" || !o.trim())
-          ? "thiếu phương án"
-          : new Set(options.map((o) => normalizeText(o as string))).size !== 4
-            ? "có 2 phương án giống nhau"
-            : !ANSWER_KEYS.includes(q.correctAnswer)
-              ? "đáp án đúng không phải A/B/C/D"
-              : null;
-    if (reason || !q) {
-      onReject(reason ?? "không hợp lệ", q ?? { slot: slotName(i) });
-      return;
+  const byCell: Record<string, RawQuestion[]> = {};
+  cells.forEach((cell, ci) => {
+    byCell[cell.id] = [];
+    for (let v = 0; v < variants; v++) {
+      const q = parsed[slotName(ci, v)];
+      const options = [q?.optionA, q?.optionB, q?.optionC, q?.optionD];
+      const reason = !q
+        ? "thiếu câu"
+        : typeof q.question !== "string" || !q.question.trim()
+          ? "thiếu câu hỏi"
+          : options.some((o) => typeof o !== "string" || !o.trim())
+            ? "thiếu phương án"
+            : new Set(options.map((o) => normalizeText(o as string))).size !== 4
+              ? "có 2 phương án giống nhau"
+              : !ANSWER_KEYS.includes(q.correctAnswer)
+                ? "đáp án đúng không phải A/B/C/D"
+                : null;
+      if (reason || !q) {
+        onReject(reason ?? "không hợp lệ", q ?? { slot: slotName(ci, v) });
+        continue;
+      }
+      byCell[cell.id].push({
+        question: q.question.trim(),
+        optionA: q.optionA.trim(),
+        optionB: q.optionB.trim(),
+        optionC: q.optionC.trim(),
+        optionD: q.optionD.trim(),
+        correctAnswer: q.correctAnswer,
+        difficulty: cell.level,
+      });
     }
-    byPoint[pointIdx] = {
-      question: q.question.trim(),
-      optionA: q.optionA.trim(),
-      optionB: q.optionB.trim(),
-      optionC: q.optionC.trim(),
-      optionD: q.optionD.trim(),
-      correctAnswer: q.correctAnswer,
-      difficulty: plan[pointIdx].level,
-    };
   });
-  return byPoint;
+  return byCell;
 }
 
-/** Ghép câu hỏi theo thứ tự nội dung, bỏ câu trùng chữ và gán ID. */
-export function finalizeQuestions(items: RawQuestion[]): Question[] {
+/** Gộp thêm câu mới vào ô, bỏ câu trùng chữ, giữ tối đa `limit` câu. */
+export function mergeCellQuestions(existing: RawQuestion[], added: RawQuestion[], limit: number): RawQuestion[] {
+  const seen = new Set(existing.map((q) => normalizeText(q.question)));
+  const merged = [...existing];
+  for (const q of added) {
+    if (merged.length >= limit) break;
+    const key = normalizeText(q.question);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(q);
+  }
+  return merged;
+}
+
+/** Tạo ngân hàng câu hỏi theo thứ tự ô của ma trận; mỗi câu mang nhãn mức độ, chủ đề con và ô. */
+export function finalizeQuestions(matrix: QuestionMatrix, byCell: Record<string, RawQuestion[]>): Question[] {
   const seen = new Set<string>();
   const questions: Question[] = [];
 
-  for (const raw of items) {
-    const key = normalizeText(raw.question);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    questions.push({
-      id: `q${questions.length + 1}`,
-      question: raw.question,
-      options: { A: raw.optionA, B: raw.optionB, C: raw.optionC, D: raw.optionD },
-      correctAnswer: raw.correctAnswer,
-      chapter: 1,
-      difficulty: raw.difficulty,
-    });
+  for (const cell of matrix.cells) {
+    for (const raw of byCell[cell.id] ?? []) {
+      const key = normalizeText(raw.question);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      questions.push({
+        id: `q${questions.length + 1}`,
+        question: raw.question,
+        options: { A: raw.optionA, B: raw.optionB, C: raw.optionC, D: raw.optionD },
+        correctAnswer: raw.correctAnswer,
+        chapter: 1,
+        difficulty: cell.level,
+        topic: matrix.topics[cell.topic]?.name,
+        cell: cell.id,
+      });
+    }
   }
 
   if (questions.length === 0) {

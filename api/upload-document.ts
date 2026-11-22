@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { verifyAuthHeader } from "./_lib/auth.js";
 import { saveUploadJob } from "./_lib/kv.js";
 import type { UploadJob } from "./_lib/kv.js";
-import { QUESTIONS_PER_BATCH, uploadFilesToAi } from "./_lib/gemini.js";
+import { DEFAULT_LEVEL_COUNTS, cellsPerBatch, uploadFilesToAi } from "./_lib/gemini.js";
 import type { DocumentInput } from "./_lib/gemini.js";
 import {
   DOCX_MIME_TYPES,
@@ -20,14 +20,17 @@ import type { StartUploadResponse, UploadFilePayload } from "../shared/types.js"
 export const config = { maxDuration: 60 };
 
 const MAX_TOTAL_RAW_BYTES = 4 * 1024 * 1024;
-const DEFAULT_QUESTIONS = 30;
-const MAX_QUESTIONS = 100;
+const MAX_EXAM_QUESTIONS = 60;
+const MAX_PER_LEVEL = 20;
+const DEFAULT_VARIANTS = 3;
+const MAX_VARIANTS = 3;
 const MAX_TIME_LIMIT_MINUTES = 600;
 
 interface UploadBody {
   pastedText?: string;
   files?: UploadFilePayload[];
-  totalQuestions?: number;
+  levelCounts?: number[];
+  variantsPerCell?: number;
   allowRetake?: boolean;
   timeLimitMinutes?: number;
 }
@@ -77,7 +80,15 @@ async function handleStart(req: VercelRequest, res: VercelResponse) {
     return;
   }
 
-  const totalQuestions = parsePositiveInt(body.totalQuestions, DEFAULT_QUESTIONS, MAX_QUESTIONS);
+  const levelCounts = Array.isArray(body.levelCounts) && body.levelCounts.length === 4
+    ? body.levelCounts.map((n) => (typeof n === "number" && n > 0 ? Math.min(Math.floor(n), MAX_PER_LEVEL) : 0))
+    : DEFAULT_LEVEL_COUNTS;
+  const examSize = levelCounts.reduce((a, b) => a + b, 0);
+  if (examSize === 0 || examSize > MAX_EXAM_QUESTIONS) {
+    sendError(res, 400, `Tổng số câu của đề phải từ 1 đến ${MAX_EXAM_QUESTIONS}.`);
+    return;
+  }
+  const variantsPerCell = parsePositiveInt(body.variantsPerCell, DEFAULT_VARIANTS, MAX_VARIANTS);
   const allowRetake = body.allowRetake === true;
   // 0 = không giới hạn; giá trị không hợp lệ cũng coi là không giới hạn.
   const rawLimit = typeof body.timeLimitMinutes === "number" ? Math.floor(body.timeLimitMinutes) : 0;
@@ -137,11 +148,12 @@ async function handleStart(req: VercelRequest, res: VercelResponse) {
     return;
   }
 
-  // Bước "plan" lập danh sách `totalQuestions` nội dung riêng biệt; sau đó mỗi bước "q:*" soạn câu hỏi cho 1 lô
-  // nội dung (theo vị trí trong danh sách) — mỗi bước là 1 lần gọi AI, luôn an toàn với trần 60s.
+  // Bước "plan" lập ma trận đề có đúng `examSize` ô (chủ đề con × mức độ); sau đó mỗi bước "q:*" soạn câu dự phòng
+  // cho 1 nhóm ô (theo vị trí trong ma trận) — mỗi bước là 1 lần gọi AI, luôn an toàn với trần 60s.
+  const batch = cellsPerBatch(variantsPerCell);
   const questionSteps: string[] = [];
-  for (let start = 0; start < totalQuestions; start += QUESTIONS_PER_BATCH) {
-    const end = Math.min(start + QUESTIONS_PER_BATCH, totalQuestions);
+  for (let start = 0; start < examSize; start += batch) {
+    const end = Math.min(start + batch, examSize);
     questionSteps.push(`q:${Array.from({ length: end - start }, (_, i) => start + i).join(",")}`);
   }
 
@@ -151,13 +163,14 @@ async function handleStart(req: VercelRequest, res: VercelResponse) {
     pastedText,
     extractedTexts,
     uploadedFiles,
-    totalQuestions,
+    levelCounts,
+    variantsPerCell,
     allowRetake,
     timeLimitMinutes,
     steps: ["lecture", "plan", ...questionSteps],
     totalSteps: 2 + questionSteps.length,
-    questionsByPoint: {},
-    retriedPoints: [],
+    questionsByCell: {},
+    cellRetries: {},
   };
 
   try {

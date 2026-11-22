@@ -3,7 +3,7 @@ import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import { verifyAuthHeader } from "./_lib/auth.js";
 import { sendError } from "./_lib/http.js";
 import { claudeGenerate, toJsonSchema } from "./_lib/claude.js";
-import { QUESTIONS_PER_BATCH, generateQuestionsForPoints, planContentPoints } from "./_lib/gemini.js";
+import { DEFAULT_LEVEL_COUNTS, cellsPerBatch, generateCellQuestions, planMatrix } from "./_lib/gemini.js";
 import { getExamConfig, getLecture, getQuestions } from "./_lib/kv.js";
 
 // Endpoint chẩn đoán (chỉ giảng viên): liệt kê model mà API key hiện tại thấy được và thử gọi nhanh
@@ -38,7 +38,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return;
   }
 
-  // ?pipeline=1: chạy thử bước lập danh sách nội dung + 1 lô câu hỏi trên bài giảng hiện có, KHÔNG lưu gì.
+  // ?pipeline=1: chạy thử bước lập ma trận + soạn câu cho 1 nhóm ô trên bài giảng hiện có, KHÔNG lưu gì.
   if (req.query.pipeline) {
     const lecture = await getLecture();
     if (!lecture) {
@@ -47,16 +47,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     const text = lecture.sections.map((s) => `${s.heading}\n${s.content}\n${s.examples.join("\n")}`).join("\n\n");
     const doc = { pastedText: text, extractedTexts: [], uploadedFiles: [] };
-    const total = Number(req.query.total) || 30;
+    const variants = Number(req.query.variants) || 3;
     const t0 = Date.now();
     try {
-      const plan = await planContentPoints(doc, total);
+      const matrix = await planMatrix(doc, DEFAULT_LEVEL_COUNTS);
       const planMs = Date.now() - t0;
-      const from = Math.min(Number(req.query.from) || 0, Math.max(0, plan.length - 1));
-      const batch = plan.slice(from, from + QUESTIONS_PER_BATCH).map((_, i) => from + i);
+      const from = Math.min(Number(req.query.from) || 0, Math.max(0, matrix.cells.length - 1));
+      const batch = matrix.cells.slice(from, from + cellsPerBatch(variants)).map((c) => c.id);
       const rejected: { reason: string; item: unknown }[] = [];
-      const questions = await generateQuestionsForPoints(doc, plan, batch, (reason, item) => rejected.push({ reason, item }));
-      res.status(200).json({ planMs, batchMs: Date.now() - t0 - planMs, batch, plan, questions, rejected });
+      const questions = await generateCellQuestions(doc, matrix, batch, variants, (reason, item) =>
+        rejected.push({ reason, item })
+      );
+      res.status(200).json({ planMs, batchMs: Date.now() - t0 - planMs, batch, matrix, questions, rejected });
     } catch (err) {
       res.status(200).json({ ms: Date.now() - t0, error: err instanceof Error ? err.message.slice(0, 800) : String(err) });
     }

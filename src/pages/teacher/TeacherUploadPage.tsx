@@ -55,11 +55,19 @@ function readFileAsBase64(file: File): Promise<string> {
 export function TeacherUploadPage() {
   const [pastedText, setPastedText] = useState("");
   const [files, setFiles] = useState<File[]>([]);
-  const [totalQuestions, setTotalQuestions] = useState(30);
+  const [levelCounts, setLevelCounts] = useState<number[]>(DEFAULT_LEVEL_COUNTS);
+  const [variantsPerCell, setVariantsPerCell] = useState(3);
   const [allowRetake, setAllowRetake] = useState(false);
   const [timeLimitMinutes, setTimeLimitMinutes] = useState(15);
   const [loadingMessage, setLoadingMessage] = useState<string | null>(null);
+  const examSize = levelCounts.reduce((a, b) => a + b, 0);
+  const numTopics = Math.max(1, ...levelCounts);
   const { token } = useTeacherAuth();
+
+  function setLevelCount(index: number, value: number) {
+    const clamped = Math.min(20, Math.max(0, Math.floor(value) || 0));
+    setLevelCounts((prev) => prev.map((v, i) => (i === index ? clamped : v)));
+  }
   const { showToast } = useToast();
   const navigate = useNavigate();
 
@@ -81,6 +89,10 @@ export function TeacherUploadPage() {
       showToast("Vui lòng dán nội dung hoặc chọn ít nhất 1 file.", "error");
       return;
     }
+    if (examSize === 0 || examSize > 60) {
+      showToast("Tổng số câu của đề phải từ 1 đến 60.", "error");
+      return;
+    }
 
     setLoadingMessage("Đang tải tài liệu lên...");
     try {
@@ -93,7 +105,8 @@ export function TeacherUploadPage() {
       );
 
       const { jobId, totalSteps } = await startUpload(token, pastedText, payloadFiles, {
-        totalQuestions,
+        levelCounts,
+        variantsPerCell,
         allowRetake,
         timeLimitMinutes,
       });
@@ -116,7 +129,9 @@ export function TeacherUploadPage() {
       }
 
       showToast(
-        `Đã tạo bài giảng "${step.result?.title}" với ${step.result?.questionCount} câu hỏi. Website sẽ tự động cập nhật cho sinh viên.`,
+        `Đã tạo bài giảng "${step.result?.title}", ngân hàng ${step.result?.questionCount} câu theo ` +
+          `${step.result?.topicCount ?? "?"} chủ đề con; mỗi đề ${step.result?.examQuestionCount ?? "?"} câu. ` +
+          `Website sẽ tự động cập nhật cho sinh viên.`,
         "success"
       );
       navigate("/teacher/lecture");
@@ -189,25 +204,43 @@ export function TeacherUploadPage() {
 
         <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-4 space-y-3">
           <div>
-            <h2 className="font-medium text-slate-800 dark:text-slate-200">Cấu hình đề thi</h2>
+            <h2 className="font-medium text-slate-800 dark:text-slate-200">Ma trận đề thi</h2>
             <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-              AI chọn ra các nội dung kiến thức khác nhau trong tài liệu và soạn mỗi nội dung đúng 1 câu, chia đều 4 mức
-              độ: Nhận biết, Thông hiểu, Vận dụng, Vận dụng cao. Mỗi lượt làm bài có đủ tất cả các câu, nhưng thứ tự
-              câu và thứ tự đáp án được đảo ngẫu nhiên.
+              AI chia tài liệu thành {numTopics} chủ đề con và lập ma trận (chủ đề con × mức độ), mỗi ô 1 câu trong đề với
+              trọng tâm riêng, rồi soạn {variantsPerCell} câu dự phòng cho mỗi ô. Mỗi lượt làm bài bốc ngẫu nhiên 1 câu
+              mỗi ô — tỉ lệ mức độ luôn cố định, không lặp nội dung — rồi đảo thứ tự câu và đáp án.
             </p>
           </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {LEVELS.map((level, i) => (
+              <div key={level}>
+                <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">{level}</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={20}
+                  value={levelCounts[i]}
+                  onChange={(e) => setLevelCount(i, Number(e.target.value))}
+                  className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                />
+              </div>
+            ))}
+          </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Số câu hỏi</label>
-              <input
-                type="number"
-                min={4}
-                max={100}
-                value={totalQuestions}
-                onChange={(e) => setTotalQuestions(Math.min(100, Math.max(1, Number(e.target.value) || 1)))}
+              <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">
+                Số câu dự phòng mỗi ô
+              </label>
+              <select
+                value={variantsPerCell}
+                onChange={(e) => setVariantsPerCell(Number(e.target.value))}
                 className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
-              />
-              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{levelSummary(totalQuestions)}</p>
+              >
+                <option value={2}>2 câu</option>
+                <option value={3}>3 câu</option>
+              </select>
             </div>
             <div>
               <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">
@@ -227,6 +260,11 @@ export function TeacherUploadPage() {
               </p>
             </div>
           </div>
+
+          <p className="text-sm text-slate-600 dark:text-slate-300">
+            Mỗi đề: <strong>{examSize}</strong> câu ({LEVELS.map((l, i) => `${levelCounts[i]} ${l}`).join(", ")}) ·
+            Ngân hàng: <strong>{examSize * variantsPerCell}</strong> câu ({examSize} ô × {variantsPerCell} câu dự phòng)
+          </p>
 
           <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
             <input
@@ -252,13 +290,8 @@ export function TeacherUploadPage() {
 }
 
 const LEVELS = ["Nhận biết", "Thông hiểu", "Vận dụng", "Vận dụng cao"];
-
-/** Cách chia số câu cho 4 mức độ — khớp với levelTargets() ở server (phần dư dồn cho mức thấp trước). */
-function levelSummary(total: number): string {
-  const base = Math.floor(total / LEVELS.length);
-  const remainder = total % LEVELS.length;
-  return LEVELS.map((level, i) => `${base + (i < remainder ? 1 : 0)} ${level}`).join(" · ");
-}
+/** Khớp DEFAULT_LEVEL_COUNTS ở server: 8 NB, 7 TH, 10 VD, 5 VDC = 30 câu. */
+const DEFAULT_LEVEL_COUNTS = [8, 7, 10, 5];
 
 function guessMimeType(filename: string): string {
   const ext = filename.toLowerCase().split(".").pop();

@@ -25,10 +25,14 @@ export interface Question {
   /** Số thứ tự chương/phần trong tài liệu (1-based). Bằng 1 nếu tài liệu không chia chương. */
   chapter: number;
   difficulty: Difficulty;
+  /** Tên chủ đề con (đề tạo theo ma trận). */
+  topic?: string;
+  /** Ô của ma trận đề (chủ đề con × mức độ); mỗi đề bốc đúng 1 câu mỗi ô. */
+  cell?: string;
 }
 
-/** Câu hỏi gửi cho sinh viên khi làm bài — không có đáp án đúng và mức độ. */
-export type QuizQuestion = Omit<Question, "correctAnswer" | "difficulty">;
+/** Câu hỏi gửi cho sinh viên khi làm bài — không có đáp án đúng, mức độ hay vị trí trong ma trận. */
+export type QuizQuestion = Omit<Question, "correctAnswer" | "difficulty" | "topic" | "cell">;
 
 export interface QuizReviewItem {
   id: string;
@@ -71,9 +75,10 @@ export interface ApiErrorBody {
 }
 
 export interface UploadConfig {
-  /** Số câu hỏi của đề (mỗi câu 1 nội dung riêng, chia đều 4 mức độ). Mọi lượt làm dùng đủ các câu này,
-   * chỉ đảo thứ tự câu và thứ tự đáp án. */
-  totalQuestions: number;
+  /** Số câu mỗi mức trong 1 đề, theo thứ tự Nhận biết, Thông hiểu, Vận dụng, Vận dụng cao (vd [8, 7, 10, 5]). */
+  levelCounts: number[];
+  /** Số câu dự phòng soạn cho mỗi ô của ma trận (mỗi đề chỉ bốc 1 câu/ô). Ngân hàng = số câu của đề × số này. */
+  variantsPerCell: number;
   /** true: sinh viên được làm bài nhiều lần (không chặn nộp lần 2 trở đi theo Họ tên + Lớp). */
   allowRetake: boolean;
   /** Giới hạn thời gian làm bài (phút), tính từ lúc sinh viên bấm bắt đầu. 0 = không giới hạn. */
@@ -107,5 +112,5 @@ export interface UploadStepResponse {
   completedSteps: number;
   totalSteps: number;
   error?: string;
-  result?: { title: string; sectionsCount: number; questionCount: number };
+  result?: { title: string; sectionsCount: number; questionCount: number; examQuestionCount?: number; topicCount?: number };
 }

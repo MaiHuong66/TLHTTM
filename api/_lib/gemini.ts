@@ -40,6 +40,9 @@ interface LlmCall {
   strict?: boolean;
   /** Chỉ áp dụng cho Claude: model riêng cho lệnh gọi này. */
   model?: string;
+  /** Chỉ áp dụng cho Claude, xem ClaudeRequest.jsonVia / effort. */
+  jsonVia?: "tool" | "output";
+  effort?: "low" | "medium" | "high";
   maxOutputTokens?: number;
 }
 
@@ -90,6 +93,8 @@ async function llm(call: LlmCall): Promise<LlmResult> {
       schema: call.schema ? toJsonSchema(call.schema) : undefined,
       strict: call.strict,
       model: call.model,
+      jsonVia: call.jsonVia,
+      effort: call.effort,
       maxTokens: call.maxOutputTokens ?? 8192,
     });
     if (call.schema && (result.truncated || result.json === undefined)) {
@@ -698,6 +703,8 @@ export function finalizeQuestions(
 /** Model dùng cho các bước kiểm định (giải lại câu hỏi, rà trùng ý) — cần phán đoán chính xác hơn bước soạn câu nên
  * mặc định dùng model mạnh hơn; đổi bằng biến môi trường CLAUDE_AUDIT_MODEL. Chỉ áp dụng khi dùng Claude. */
 const AUDIT_MODEL = process.env.CLAUDE_AUDIT_MODEL?.trim() || "claude-sonnet-5-5";
+/** Mức suy nghĩ của các bước kiểm định — đủ để phán đoán nhưng vẫn xong trong giới hạn 60s. */
+const AUDIT_EFFORT = (process.env.CLAUDE_AUDIT_EFFORT?.trim() as "low" | "medium" | "high" | undefined) || "low";
 
 /** 1 câu trong ngân hàng đang soạn, kèm khóa tạm `key` để các bước kiểm định tham chiếu. */
 export interface AuditItem {
@@ -739,7 +746,8 @@ export async function verifyAnswers(doc: DocumentInput, items: AuditItem[]): Pro
     instruction,
     doc,
     model: AUDIT_MODEL,
-    strict: false,
+    jsonVia: "output",
+    effort: AUDIT_EFFORT,
     schema: {
       type: Type.OBJECT,
       properties: Object.fromEntries(
@@ -799,7 +807,8 @@ export async function findOverlaps(items: AuditItem[]): Promise<[string, string]
   const result = await llm({
     instruction,
     model: AUDIT_MODEL,
-    strict: false,
+    jsonVia: "output",
+    effort: AUDIT_EFFORT,
     schema: {
       type: Type.OBJECT,
       properties: {

@@ -48,6 +48,11 @@ export interface ClaudeRequest {
   strict?: boolean;
   /** Model riêng cho lệnh gọi này (mặc định MODEL). */
   model?: string;
+  /** Cách lấy JSON theo `schema`: "tool" (mặc định — ép gọi 1 tool) hoặc "output" (output_config.format, dùng cho
+   * model không hỗ trợ ép gọi tool như Sonnet 5.5; luôn đúng schema). */
+  jsonVia?: "tool" | "output";
+  /** Mức suy nghĩ (output_config.effort) — để thấp cho các bước phải xong trong 60s. */
+  effort?: "low" | "medium" | "high";
   maxTokens: number;
 }
 
@@ -150,6 +155,12 @@ export async function claudeGenerate(req: ClaudeRequest): Promise<ClaudeResult> 
       : req.schema
     : undefined;
 
+  const viaOutput = !!inputSchema && req.jsonVia === "output";
+  const outputConfig = {
+    ...(req.effort ? { effort: req.effort } : {}),
+    ...(viaOutput ? { format: { type: "json_schema" as const, schema: inputSchema as Record<string, unknown> } } : {}),
+  };
+
   const response = await withRetry(() =>
     ai.beta.messages.create({
       model: req.model || MODEL,
@@ -157,7 +168,8 @@ export async function claudeGenerate(req: ClaudeRequest): Promise<ClaudeResult> 
       system: req.system,
       messages: req.messages.map((m) => ({ role: m.role, content: toBlocks(m.parts) })),
       betas: BETAS,
-      ...(inputSchema
+      ...(Object.keys(outputConfig).length > 0 ? { output_config: outputConfig } : {}),
+      ...(inputSchema && !viaOutput
         ? {
             tools: [
               {
@@ -181,9 +193,18 @@ export async function claudeGenerate(req: ClaudeRequest): Promise<ClaudeResult> 
     .trim();
 
   let json: unknown = undefined;
-  const toolBlock = response.content.find((b) => b.type === "tool_use") as { input?: unknown } | undefined;
-  if (toolBlock) {
-    const input = normalizeToSchema(toolBlock.input, inputSchema) as Record<string, unknown> | undefined;
+  let raw: unknown = undefined;
+  if (viaOutput) {
+    try {
+      raw = JSON.parse(text.replace(/^```(?:json)?\s*|\s*```$/g, ""));
+    } catch {
+      raw = undefined;
+    }
+  } else {
+    raw = (response.content.find((b) => b.type === "tool_use") as { input?: unknown } | undefined)?.input;
+  }
+  if (raw !== undefined) {
+    const input = normalizeToSchema(raw, inputSchema) as Record<string, unknown> | undefined;
     json = wrapped ? input?.items : input;
   }
 

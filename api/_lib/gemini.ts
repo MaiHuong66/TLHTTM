@@ -791,11 +791,11 @@ export async function findOverlaps(
   const byTopic = new Map<string, AuditItem[]>();
   for (const item of items) byTopic.set(item.topic, [...(byTopic.get(item.topic) ?? []), item]);
   const groups = [...byTopic.values()].filter((list) => new Set(list.map((i) => i.cell)).size > 1);
-  // Kết quả AI dao động giữa các lần gọi, nên mỗi chủ đề được rà 2 lần độc lập (thứ tự câu đảo ngược) rồi gộp: cặp nào
-  // bị 1 trong 2 lần đánh dấu đều xử lý — thà soạn lại thừa còn hơn để lọt câu hỏi trùng nội dung vào đề.
-  // Thêm 1 lượt rà toàn ngân hàng, chạy song song, chỉ tìm cặp trùng giữa 2 chủ đề khác nhau.
+  // Kết quả AI dao động giữa các lần gọi, nên mỗi chủ đề được rà bằng 2 cách độc lập rồi gộp — AI tự liệt kê cặp trùng,
+  // và AI xét lần lượt TỪNG cặp khác ô — cặp nào bị 1 trong 2 cách đánh dấu đều xử lý: thà soạn lại thừa còn hơn để lọt
+  // câu hỏi trùng nội dung vào đề. Thêm 1 lượt rà toàn ngân hàng tìm cặp trùng giữa 2 chủ đề khác nhau. Chạy song song.
   const results = await Promise.all([
-    ...groups.flatMap((list) => [findOverlapsInGroup(list, onRaw), findOverlapsInGroup([...list].reverse(), onRaw)]),
+    ...groups.flatMap((list) => [findOverlapsInGroup(list, onRaw), judgeAllPairsInGroup(list)]),
     findCrossTopicOverlaps(items),
   ]);
   const seen = new Set<string>();
@@ -863,6 +863,63 @@ async function findCrossTopicOverlaps(items: AuditItem[]): Promise<[string, stri
   return (Array.isArray(pairs) ? pairs : [])
     .map((p) => [items[Number(p?.a) - 1], items[Number(p?.b) - 1]] as const)
     .filter(([a, b]) => a && b && a.topic !== b.topic)
+    .map(([a, b]) => [a!.key, b!.key] as [string, string]);
+}
+
+/** Xét LẦN LƯỢT từng cặp câu khác ô trong 1 chủ đề (AI phải trả lời có/không cho mọi cặp được liệt kê, thay vì tự nhớ
+ * ra cặp nào trùng) — cách tự liệt kê ở findOverlapsInGroup vẫn bỏ sót cặp rõ ràng khi thử thật (vd câu "worm tự sao
+ * chép qua mạng" với tình huống "mã độc tự gửi email cho danh bạ là loại gì"). */
+async function judgeAllPairsInGroup(items: AuditItem[]): Promise<[string, string][]> {
+  const pairs: [number, number][] = [];
+  for (let i = 0; i < items.length; i++) {
+    for (let j = i + 1; j < items.length; j++) if (items[i].cell !== items[j].cell) pairs.push([i + 1, j + 1]);
+  }
+  if (pairs.length === 0) return [];
+  const listing = items
+    .map((item, i) => `[${i + 1}] ${item.question} → Đáp án: ${item.options[item.correctAnswer]}`)
+    .join("\n");
+
+  const instruction =
+    `Bạn là giám khảo thẩm định đề trắc nghiệm chủ đề "${items[0].topic}". Dưới đây là các câu hỏi và danh sách các cặp ` +
+    `câu có thể cùng xuất hiện trong MỘT đề thi. Với TỪNG cặp trong danh sách, trả lời same = true nếu hai câu bị coi ` +
+    `là HỎI TRÙNG NỘI DUNG khi cùng nằm trong một đề, tức là một trong các trường hợp:\n` +
+    `- cùng kiểm tra một ý kiến thức (cùng khái niệm, đặc điểm, quy tắc, sự kiện, cùng một loại đối tượng được nhận ` +
+    `diện), kể cả khi một câu hỏi lý thuyết còn câu kia là tình huống áp dụng chính ý đó, hoặc khác mức độ, khác cách hỏi;\n` +
+    `- câu này nêu sẵn, gợi ý hoặc để lộ đáp án của câu kia.\n` +
+    `Ví dụ same = true: "Loại mã độc nào tự sao chép và lây qua mạng?" (worm) và "Máy tự gửi email kèm tệp cho cả danh ` +
+    `bạ, đó là mã độc gì?" (worm) — cùng kiểm tra đặc điểm của worm. same = false khi hai câu chỉ cùng chủ đề nhưng ` +
+    `kiểm tra các ý khác hẳn nhau (vd một câu về worm, một câu về luật bảo vệ dữ liệu cá nhân).\n` +
+    `Trả lời ĐỦ cả ${pairs.length} cặp, đúng thứ tự.\n\nCÂU HỎI:\n${listing}\n\nCÁC CẶP CẦN XÉT:\n` +
+    pairs.map(([a, b]) => `${a}-${b}`).join(", ");
+
+  const result = await llm({
+    instruction,
+    model: AUDIT_MODEL,
+    jsonVia: "output",
+    effort: AUDIT_EFFORT,
+    schema: {
+      type: Type.OBJECT,
+      properties: {
+        checks: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: { a: { type: Type.INTEGER }, b: { type: Type.INTEGER }, same: { type: Type.BOOLEAN } },
+            required: ["a", "b", "same"],
+          },
+        },
+      },
+      required: ["checks"],
+    },
+    maxOutputTokens: 4000,
+  });
+
+  const checks = ((result.json as { checks?: { a?: unknown; b?: unknown; same?: unknown }[] } | undefined)?.checks ??
+    []) as { a?: unknown; b?: unknown; same?: unknown }[];
+  return (Array.isArray(checks) ? checks : [])
+    .filter((c) => c?.same === true)
+    .map((c) => [items[Number(c.a) - 1], items[Number(c.b) - 1]] as const)
+    .filter(([a, b]) => a && b && a.cell !== b.cell)
     .map(([a, b]) => [a!.key, b!.key] as [string, string]);
 }
 

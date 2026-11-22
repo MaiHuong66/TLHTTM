@@ -5,7 +5,7 @@ import { sendError } from "./_lib/http.js";
 import { claudeGenerate, toJsonSchema } from "./_lib/claude.js";
 import { DEFAULT_LEVEL_COUNTS, cellsPerBatch, findOverlaps, generateCellQuestions, planMatrix, verifyAnswers } from "./_lib/gemini.js";
 import type { AuditItem } from "./_lib/gemini.js";
-import { getExamConfig, getLecture, getQuestions } from "./_lib/kv.js";
+import { getExamConfig, getLecture, getQuestions, setExamConfig } from "./_lib/kv.js";
 
 // Endpoint chẩn đoán (chỉ giảng viên): liệt kê model mà API key hiện tại thấy được và thử gọi nhanh
 // từng model ứng viên, để biết model nào dùng được. Không trả về API key.
@@ -83,7 +83,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           topic ? items.filter((i) => i.topic.includes(topic)) : items,
           (t, raw) => (raws[t] = raw)
         );
-        res.status(200).json({ ms: Date.now() - t0, pairs, raws: topic ? raws : undefined });
+        let saved: number | undefined;
+        if (req.query.save && !topic) {
+          // Rà lại đề đang dùng: lưu thêm các cặp trùng mới vào ExamConfig.conflicts để lúc bốc đề tránh.
+          const examConfig = await getExamConfig();
+          if (examConfig) {
+            const all = [...(examConfig.conflicts ?? []), ...pairs];
+            const seen = new Set<string>();
+            examConfig.conflicts = all.filter(([a, b]) => {
+              const id = [a, b].sort().join("|");
+              if (seen.has(id)) return false;
+              seen.add(id);
+              return true;
+            });
+            await setExamConfig(examConfig);
+            saved = examConfig.conflicts.length;
+          }
+        }
+        res.status(200).json({ ms: Date.now() - t0, pairs, saved, raws: topic ? raws : undefined });
       }
     } catch (err) {
       res.status(200).json({ ms: Date.now() - t0, error: err instanceof Error ? err.message.slice(0, 800) : String(err) });

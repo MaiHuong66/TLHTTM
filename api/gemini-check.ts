@@ -33,7 +33,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       count: questions?.length ?? 0,
       levels,
       examConfig,
-      questions: (questions ?? []).map((q) => ({ id: q.id, difficulty: q.difficulty, question: q.question })),
+      questions: (questions ?? []).map((q) => ({
+        id: q.id,
+        difficulty: q.difficulty,
+        topic: q.topic,
+        cell: q.cell,
+        question: q.question,
+        options: q.options,
+        correctAnswer: q.correctAnswer,
+      })),
     });
     return;
   }

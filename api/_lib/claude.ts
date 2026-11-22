@@ -43,6 +43,9 @@ export interface ClaudeRequest {
   messages: ClaudeMessage[];
   /** JSON Schema (type viết thường) của kết quả; nếu có, Claude bị buộc trả về đúng cấu trúc này qua tool. */
   schema?: Record<string, unknown>;
+  /** Mặc định true: Claude bắt buộc trả đúng schema. Tắt cho schema quá lớn (Claude báo "compiled grammar is too
+   * large") — khi đó nơi gọi phải tự kiểm tra/sửa kết quả. */
+  strict?: boolean;
   maxTokens: number;
 }
 
@@ -159,7 +162,7 @@ export async function claudeGenerate(req: ClaudeRequest): Promise<ClaudeResult> 
                 name: "submit_result",
                 description: "Trả về kết quả cuối cùng đúng cấu trúc yêu cầu.",
                 input_schema: inputSchema as { type: "object" },
-                strict: true,
+                strict: req.strict ?? true,
               },
             ],
             tool_choice: { type: "tool" as const, name: "submit_result" },

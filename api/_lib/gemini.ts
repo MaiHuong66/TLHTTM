@@ -36,6 +36,8 @@ interface LlmCall {
   history?: ChatMessage[];
   /** Schema kiểu Gemini (Type.OBJECT/ARRAY...) — nếu có, trả về JSON đúng cấu trúc trong `json`. */
   schema?: unknown;
+  /** Chỉ áp dụng cho Claude, xem ClaudeRequest.strict. */
+  strict?: boolean;
   maxOutputTokens?: number;
 }
 
@@ -84,6 +86,7 @@ async function llm(call: LlmCall): Promise<LlmResult> {
       system: call.system,
       messages,
       schema: call.schema ? toJsonSchema(call.schema) : undefined,
+      strict: call.strict,
       maxTokens: call.maxOutputTokens ?? 8192,
     });
     if (call.schema && (result.truncated || result.json === undefined)) {
@@ -418,13 +421,31 @@ export async function planMatrix(doc: DocumentInput, levelCounts: number[]): Pro
     `KHÁC NHAU, không trùng, không bao hàm nhau, để đề không hỏi lặp một nội dung.\n` +
     `Chỉ dùng nội dung có trong tài liệu. Viết bằng tiếng Việt.`;
 
-  const result = await llm({ instruction, doc, schema: matrixPlanSchema(numTopics), maxOutputTokens: 6000 });
-  const parsed = result.json as Record<string, { name: string; description: string; cells: { level: string; focus: string }[] }>;
-  if (!parsed || typeof parsed !== "object") {
-    throw new Error("AI trả về ma trận đề không hợp lệ.");
+  type RawTopic = { name: string; description: string; cells: { level: string; focus: string }[] };
+  const isValid = (t: RawTopic | undefined) => !!t && typeof t.name === "string" && t.name.trim() !== "";
+
+  // Schema ma trận quá lớn cho chế độ strict của Claude ("compiled grammar is too large") nên gọi không strict;
+  // repairMatrix() bảo đảm ràng buộc của ma trận. Nếu AI trả thiếu chủ đề thì gọi lại 1 lần.
+  let topics: RawTopic[] = [];
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const result = await llm({
+      instruction,
+      doc,
+      schema: matrixPlanSchema(numTopics),
+      strict: false,
+      maxOutputTokens: 6000,
+    });
+    const parsed = (result.json ?? {}) as Record<string, RawTopic | undefined>;
+    topics = Array.from({ length: numTopics }, (_, i) => parsed[`chu_de_${i + 1}`] ?? { name: "", description: "", cells: [] });
+    if (topics.every(isValid)) break;
   }
-  const topics = Array.from({ length: numTopics }, (_, i) => parsed[`chu_de_${i + 1}`] ?? { name: "", description: "", cells: [] });
-  return repairMatrix(topics, levelCounts);
+  if (topics.filter(isValid).length < Math.ceil(numTopics / 2)) {
+    throw new Error("AI không chia được tài liệu thành các chủ đề con. Vui lòng thử lại.");
+  }
+  return repairMatrix(
+    topics.map((t) => ({ ...t, cells: Array.isArray(t.cells) ? t.cells : [] })),
+    levelCounts
+  );
 }
 
 const questionSchema = {

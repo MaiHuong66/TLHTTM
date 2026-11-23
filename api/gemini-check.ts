@@ -6,6 +6,8 @@ import { claudeGenerate, toJsonSchema } from "./_lib/claude.js";
 import { DEFAULT_LEVEL_COUNTS, cellsPerBatch, findOverlaps, generateCellQuestions, planMatrix, verifyAnswers } from "./_lib/gemini.js";
 import type { AuditItem } from "./_lib/gemini.js";
 import { getExamConfig, getLecture, getQuestions, setExamConfig, setQuestions } from "./_lib/kv.js";
+import { blockedCells } from "./_lib/draw.js";
+import type { Question } from "../shared/types.js";
 
 // Endpoint chẩn đoán (chỉ giảng viên): liệt kê model mà API key hiện tại thấy được và thử gọi nhanh
 // từng model ứng viên, để biết model nào dùng được. Không trả về API key.
@@ -28,6 +30,70 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // ?version=1: commit đang chạy trên Vercel (để biết bản mới đã deploy xong chưa).
   if (req.query.version) {
     res.status(200).json({ commit: process.env.VERCEL_GIT_COMMIT_SHA ?? null });
+    return;
+  }
+
+  // POST ?patchBank=1 (KHÔNG gọi AI): sửa ngân hàng đang dùng theo kết quả rà soát thủ công.
+  // Body: { removeIds?: string[], replaceCell?: { cell, topic, questions: {id, question, options, correctAnswer}[] },
+  //         addConflicts?: [string, string][] }. Câu thay thế giữ nguyên mức độ của ô. Từ chối nếu sau khi sửa có ô
+  // không còn câu nào hoặc không bốc được đề đủ mọi ô mà tránh hết cặp trùng.
+  if (req.query.patchBank && req.method === "POST") {
+    const body = (req.body ?? {}) as {
+      removeIds?: string[];
+      replaceCell?: { cell: string; topic?: string; questions: Pick<Question, "id" | "question" | "options" | "correctAnswer">[] };
+      addConflicts?: [string, string][];
+    };
+    const [questions, examConfig] = await Promise.all([getQuestions(), getExamConfig()]);
+    if (!questions || !examConfig?.matrixCells) {
+      sendError(res, 404, "Đề hiện tại không theo ma trận.");
+      return;
+    }
+    let bank = questions.filter((q) => !(body.removeIds ?? []).includes(q.id));
+    if (body.replaceCell) {
+      const old = bank.filter((q) => q.cell === body.replaceCell!.cell);
+      if (old.length === 0) {
+        sendError(res, 400, `Không có ô ${body.replaceCell.cell}.`);
+        return;
+      }
+      const level = old[0].difficulty;
+      const removedIds = old.map((q) => q.id);
+      bank = bank.filter((q) => q.cell !== body.replaceCell!.cell);
+      for (const q of body.replaceCell.questions) {
+        if (bank.some((b) => b.id === q.id)) {
+          sendError(res, 400, `Trùng id ${q.id}.`);
+          return;
+        }
+        bank.push({
+          id: q.id,
+          question: q.question,
+          options: q.options,
+          correctAnswer: q.correctAnswer,
+          chapter: 1,
+          difficulty: level,
+          topic: body.replaceCell.topic ?? old[0].topic,
+          cell: body.replaceCell.cell,
+        });
+      }
+      body.removeIds = [...(body.removeIds ?? []), ...removedIds];
+    }
+    const ids = new Set(bank.map((q) => q.id));
+    const seen = new Set<string>();
+    const conflicts = [...(examConfig.conflicts ?? []), ...(body.addConflicts ?? [])].filter(([a, b]) => {
+      const key = [a, b].sort().join("|");
+      if (!ids.has(a) || !ids.has(b) || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    const emptyCells = examConfig.matrixCells.filter((c) => !bank.some((q) => q.cell === c));
+    const blocked = blockedCells(bank, examConfig.matrixCells, conflicts);
+    if (emptyCells.length > 0 || blocked.length > 0) {
+      sendError(res, 409, `Không áp dụng: ô trống ${emptyCells.join(",") || "-"}; ô không bốc được ${blocked.join(",") || "-"}.`);
+      return;
+    }
+    await setQuestions(bank);
+    examConfig.conflicts = conflicts;
+    await setExamConfig(examConfig);
+    res.status(200).json({ count: bank.length, conflicts: conflicts.length, removed: body.removeIds ?? [] });
     return;
   }
 
